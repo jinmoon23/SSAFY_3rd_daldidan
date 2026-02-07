@@ -94,17 +94,19 @@ print(f"fc2_bias:   {fc2_bias.shape}")
 # ─────────────────────────────────────────────
 # Step 3: JSON 저장
 # ─────────────────────────────────────────────
+# FE의 MlpWeights 인터페이스와 일치하는 nested 구조:
+#   interface MlpWeights {
+#     fc1: { weight: number[][]; bias: number[] };
+#     fc2: { weight: number[][]; bias: number[] };
+#   }
 weights = {
-    "fc1_weight": fc1_weight.tolist(),  # [128][1286]
-    "fc1_bias": fc1_bias.tolist(),      # [128]
-    "fc2_weight": fc2_weight.tolist(),  # [1][128]
-    "fc2_bias": fc2_bias.tolist(),      # [1]
-    "_meta": {
-        "source": "best_val_r2.pth",
-        "fc1": "Linear(1286, 128) → ReLU",
-        "fc2": "Linear(128, 1) → Brix",
-        "input_order": "cnn_features[1280] + manual_features[6]",
-        "manual_features": ["Rn", "C", "ycbcr_diff", "ycbcr_norm", "cat02_first", "cluster_shadow"],
+    "fc1": {
+        "weight": fc1_weight.tolist(),  # [128][1286]
+        "bias": fc1_bias.tolist(),      # [128]
+    },
+    "fc2": {
+        "weight": fc2_weight.tolist(),  # [1][128]
+        "bias": fc2_bias.tolist(),      # [1]
     },
 }
 
@@ -133,19 +135,19 @@ dummy_combined = torch.cat([dummy_cnn, dummy_manual], dim=1)
 with torch.no_grad():
     pt_output = model.fc(dummy_combined).item()
 
-# JSON 가중치 추론 (JS에서 실행될 로직과 동일)
+# JSON 가중치 추론 (JS에서 실행될 로직과 동일 — nested 구조 사용)
 combined_np = dummy_combined.numpy().flatten()  # [1286]
 
 hidden = np.zeros(128)
 for i in range(128):
-    s = fc1_bias[i]
+    s = weights["fc1"]["bias"][i]
     for j in range(1286):
-        s += fc1_weight[i][j] * combined_np[j]
+        s += weights["fc1"]["weight"][i][j] * combined_np[j]
     hidden[i] = max(0, s)  # ReLU
 
-output = fc2_bias[0]
+output = weights["fc2"]["bias"][0]
 for i in range(128):
-    output += fc2_weight[0][i] * hidden[i]
+    output += weights["fc2"]["weight"][0][i] * hidden[i]
 
 print(f"  PyTorch 출력: {pt_output:.6f}")
 print(f"  JSON 추론:    {output:.6f}")

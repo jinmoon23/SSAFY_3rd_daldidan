@@ -40,6 +40,54 @@ export interface SweetnessConfig {
   ) => void;
 }
 
+// ── Stable ID Tracking ──────────────────────────
+const IOU_MATCH_THRESHOLD = 0.3;
+
+type BBox = { xmin: number; ymin: number; xmax: number; ymax: number };
+
+function bboxIoU(a: BBox, b: BBox): number {
+  const x1 = Math.max(a.xmin, b.xmin);
+  const y1 = Math.max(a.ymin, b.ymin);
+  const x2 = Math.min(a.xmax, b.xmax);
+  const y2 = Math.min(a.ymax, b.ymax);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const areaA = (a.xmax - a.xmin) * (a.ymax - a.ymin);
+  const areaB = (b.xmax - b.xmin) * (b.ymax - b.ymin);
+  return inter / (areaA + areaB - inter + 1e-6);
+}
+
+function assignStableIds(
+  current: SegmentationResult[],
+  prev: SegmentationResult[],
+  nextIdRef: { current: number }
+): SegmentationResult[] {
+  const usedPrevIds = new Set<number>();
+  const result: SegmentationResult[] = [];
+
+  for (const seg of current) {
+    let bestIoU = 0;
+    let bestPrevId = -1;
+
+    for (const prevSeg of prev) {
+      if (usedPrevIds.has(prevSeg.id)) continue;
+      const iou = bboxIoU(seg.bbox, prevSeg.bbox);
+      if (iou > bestIoU) {
+        bestIoU = iou;
+        bestPrevId = prevSeg.id;
+      }
+    }
+
+    if (bestIoU >= IOU_MATCH_THRESHOLD && bestPrevId >= 0) {
+      usedPrevIds.add(bestPrevId);
+      result.push({ ...seg, id: bestPrevId });
+    } else {
+      result.push({ ...seg, id: nextIdRef.current++ });
+    }
+  }
+
+  return result;
+}
+
 export function useSegmentation(
   format: any,
   sweetnessConfig?: SweetnessConfig
@@ -50,6 +98,10 @@ export function useSegmentation(
   const [segmentations, setSegmentations] = useState<SegmentationResult[]>([]);
   const [hasPermission, setHasPermission] = useState(false);
 
+  // Stable ID tracking: 프레임 간 IoU 매칭으로 ID 유지
+  const nextIdRef = useRef(0);
+  const prevSegRef = useRef<SegmentationResult[]>([]);
+
   // Phase 3: sweetnessConfig를 ref에 저장 → frame processor 재생성 방지
   const sweetnessConfigRef = useRef(sweetnessConfig);
   sweetnessConfigRef.current = sweetnessConfig;
@@ -57,10 +109,12 @@ export function useSegmentation(
   const { preprocessFrameForSeg, cropAndResize, cropAndResizeUint8, logWorklet } =
     useImageProcessing();
 
-  // Worklet → JS 스레드로 세그멘테이션 결과 전달
+  // Worklet → JS 스레드로 세그멘테이션 결과 전달 (stable ID 할당 후)
   const updateSegmentationsWorklet = useRef(
     Worklets.createRunOnJS((data: SegmentationResult[]) => {
-      setSegmentations(data);
+      const stable = assignStableIds(data, prevSegRef.current, nextIdRef);
+      prevSegRef.current = stable;
+      setSegmentations(stable);
     })
   ).current;
 
@@ -241,6 +295,8 @@ export function useSegmentation(
     return () => {
       modelRef.current = null;
       frameCount.value = 0;
+      nextIdRef.current = 0;
+      prevSegRef.current = [];
       setSegmentations([]);
     };
   }, []);
