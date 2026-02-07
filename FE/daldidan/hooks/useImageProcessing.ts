@@ -91,8 +91,29 @@ export const useImageProcessing = () => {
     }
   };
 
+  // YOLOv8n-seg용 전처리: float32 정규화 (0~1), 640×640
+  const preprocessFrameForSeg = (frame: any, targetSize: number) => {
+    'worklet';
+    const shortSide = Math.min(frame.width, frame.height);
+    const cropX = (frame.width - shortSide) / 2;
+    const cropY = (frame.height - shortSide) / 2;
+
+    return resize(frame, {
+      scale: { width: targetSize, height: targetSize },
+      pixelFormat: 'rgb',
+      dataType: 'float32',
+      crop: {
+        x: cropX,
+        y: cropY,
+        width: shortSide,
+        height: shortSide,
+      },
+    });
+  };
+
   return {
     preprocessFrame,
+    preprocessFrameForSeg,
     extractCroppedData,
     clamp,
     logWorklet,

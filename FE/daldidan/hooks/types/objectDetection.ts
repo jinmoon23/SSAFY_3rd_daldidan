@@ -39,3 +39,32 @@ export interface AnalyzedObjectResult {
 export interface ScreenshotAnalysisResponse {
   results: AnalyzedObjectResult[]; // 백엔드 응답의 "results" 키 아래에 객체 배열이 담김
 }
+
+// Phase 3: 온디바이스 실시간 세그멘테이션 결과
+export interface SegmentationResult {
+  id: number;
+  bbox: {
+    xmin: number;
+    ymin: number;
+    xmax: number;
+    ymax: number;
+  };
+  polygon: number[][]; // 세그멘테이션 폴리곤 좌표 [[x,y], ...]
+  score: number;
+  sweetness?: number; // 터치 후 채워지는 당도 (Phase 2~3)
+  isLoading?: boolean; // 당도 예측 중
+}
+
+// 크롭된 이미지 데이터 (Worklet에서 JS로 전달)
+export interface CroppedImageData {
+  data: number[];
+  width: number;
+  height: number;
+  isJPEG: boolean;
+}
+
+// DetectionResult (기존 호환)
+export interface DetectionResult {
+  detection: Detection;
+  timestamp: number;
+}
