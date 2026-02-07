@@ -2,7 +2,7 @@
  * useSegmentation — YOLOv8n-seg 온디바이스 실시간 세그멘테이션 훅
  *
  * 카메라 프레임을 Worklet에서 처리하여 사과의 세그멘테이션 마스크를 실시간 추출.
- * EfficientDet-lite0 기반 useObjectDetection을 대체.
+ * Phase 3: 선택적으로 EfficientNet-B0 크롭 캡처 + 수동 특징 추출 지원.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -13,7 +13,7 @@ import {
   TensorflowModelDelegate,
 } from 'react-native-fast-tflite';
 import { Camera, useFrameProcessor } from 'react-native-vision-camera';
-import { Worklets } from 'react-native-worklets-core';
+import { Worklets, ISharedValue } from 'react-native-worklets-core';
 import { useImageProcessing } from './useImageProcessing';
 import { postprocessSegWorklet, SegOutputResult } from './useSegPostprocessing';
 import { SegmentationResult } from './types/objectDetection';
@@ -21,15 +21,41 @@ import {
   SEG_MODEL_INPUT_SIZE,
   SEG_SAMPLE_RATE,
 } from '../constants/segModel';
+import { extractManualFeaturesWorklet } from './useManualFeatures';
+import {
+  CropRequest,
+  EFFICIENTNET_INPUT_SIZE,
+  MANUAL_FEATURE_CROP_SIZE,
+  IMAGENET_MEAN,
+  IMAGENET_STD,
+} from './useSweetnessPredictor';
 
-export function useSegmentation(format: any) {
+export interface SweetnessConfig {
+  sweetnessModelRef: React.RefObject<TensorflowModel | null>;
+  cropRequest: ISharedValue<string | null>;
+  handleFeaturesFromWorklet: (
+    appleId: number,
+    cnnFeatures: number[],
+    manualFeatures: number[]
+  ) => void;
+}
+
+export function useSegmentation(
+  format: any,
+  sweetnessConfig?: SweetnessConfig
+) {
   const modelRef = useRef<TensorflowModel | null>(null);
   const cameraRef = useRef<Camera>(null);
-  const frameCount = Worklets.createSharedValue(0);
+  const frameCount = useRef(Worklets.createSharedValue(0)).current;
   const [segmentations, setSegmentations] = useState<SegmentationResult[]>([]);
   const [hasPermission, setHasPermission] = useState(false);
 
-  const { preprocessFrameForSeg, logWorklet } = useImageProcessing();
+  // Phase 3: sweetnessConfig를 ref에 저장 → frame processor 재생성 방지
+  const sweetnessConfigRef = useRef(sweetnessConfig);
+  sweetnessConfigRef.current = sweetnessConfig;
+
+  const { preprocessFrameForSeg, cropAndResize, cropAndResizeUint8, logWorklet } =
+    useImageProcessing();
 
   // Worklet → JS 스레드로 세그멘테이션 결과 전달
   const updateSegmentationsWorklet = useRef(
@@ -78,12 +104,100 @@ export function useSegmentation(format: any) {
     }
   };
 
-  // FrameProcessor — 매 N프레임마다 세그멘테이션 추론
+  // FrameProcessor — 매 N프레임마다 세그멘테이션 추론 + 온디맨드 당도 크롭
   const frameProcessor = useFrameProcessor(
     (frame) => {
       'worklet';
       if (!modelRef.current) return;
 
+      // ── Phase 3: 당도 크롭 요청 처리 (매 프레임 체크) ──
+      const sc = sweetnessConfigRef.current;
+      if (sc) {
+        const requestStr = sc.cropRequest.value;
+        if (requestStr && sc.sweetnessModelRef.current) {
+          sc.cropRequest.value = null; // 즉시 클리어
+
+          try {
+            const request = JSON.parse(requestStr) as CropRequest;
+            const { appleId, bbox } = request;
+            const cropX = Math.max(0, Math.floor(bbox.xmin));
+            const cropY = Math.max(0, Math.floor(bbox.ymin));
+            const cropW = Math.min(
+              Math.floor(bbox.xmax - bbox.xmin),
+              frame.width - cropX
+            );
+            const cropH = Math.min(
+              Math.floor(bbox.ymax - bbox.ymin),
+              frame.height - cropY
+            );
+
+            if (cropW >= 10 && cropH >= 10) {
+              // 1. EfficientNet 입력: 224×224 float32 (0~1)
+              const cnnInput = cropAndResize(
+                frame,
+                cropX,
+                cropY,
+                cropW,
+                cropH,
+                EFFICIENTNET_INPUT_SIZE
+              );
+
+              if (cnnInput) {
+                // 2. ImageNet 정규화: (pixel - mean) / std
+                const floatView = new Float32Array(cnnInput);
+                const px = EFFICIENTNET_INPUT_SIZE * EFFICIENTNET_INPUT_SIZE;
+                for (let i = 0; i < px; i++) {
+                  const b = i * 3;
+                  floatView[b] = (floatView[b] - IMAGENET_MEAN[0]) / IMAGENET_STD[0];
+                  floatView[b + 1] =
+                    (floatView[b + 1] - IMAGENET_MEAN[1]) / IMAGENET_STD[1];
+                  floatView[b + 2] =
+                    (floatView[b + 2] - IMAGENET_MEAN[2]) / IMAGENET_STD[2];
+                }
+
+                // 3. EfficientNet 추론 → 1280 features
+                const cnnOutputs =
+                  sc.sweetnessModelRef.current!.runSync([cnnInput]);
+                const cnnFeaturesRaw = cnnOutputs[0] as Float32Array;
+                const cnnFeatures: number[] = [];
+                for (let i = 0; i < cnnFeaturesRaw.length; i++) {
+                  cnnFeatures.push(cnnFeaturesRaw[i]);
+                }
+
+                // 4. Manual features 용 64×64 uint8 크롭
+                const manualInput = cropAndResizeUint8(
+                  frame,
+                  cropX,
+                  cropY,
+                  cropW,
+                  cropH,
+                  MANUAL_FEATURE_CROP_SIZE
+                );
+
+                if (manualInput) {
+                  // 5. Manual features 추출
+                  const manualFeatures = extractManualFeaturesWorklet(
+                    manualInput,
+                    MANUAL_FEATURE_CROP_SIZE,
+                    MANUAL_FEATURE_CROP_SIZE
+                  );
+
+                  // 6. JS로 전송 → MLP 추론
+                  sc.handleFeaturesFromWorklet(
+                    appleId,
+                    cnnFeatures,
+                    manualFeatures
+                  );
+                }
+              }
+            }
+          } catch (error) {
+            logWorklet(`[Worklet] Sweetness crop error: ${error}`);
+          }
+        }
+      }
+
+      // ── 기존: 세그멘테이션 추론 (매 N프레임) ──
       frameCount.value = (frameCount.value + 1) % SEG_SAMPLE_RATE;
       if (frameCount.value !== 0) return;
 

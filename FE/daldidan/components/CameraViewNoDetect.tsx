@@ -12,7 +12,7 @@ import {
 import { Camera, useCameraDevice } from 'react-native-vision-camera';
 import { useSegmentation } from '../hooks/useSegmentation';
 import { useTouchToApple } from '../hooks/useTouchToApple';
-import { useObjectAnalysis } from '../hooks/useObjectAnalysis';
+import { useSweetnessPredictor } from '../hooks/useSweetnessPredictor';
 import { SegmentationResult } from '../hooks/types/objectDetection';
 import AppleHint from './AppleHint';
 import RealtimeSegOverlay from './RealtimeSegOverlay';
@@ -42,9 +42,16 @@ export default function CameraView() {
     device?.formats.find((f) => f.maxFps >= 60) ?? device?.formats[0];
   const fps = format ? Math.min(60, format.maxFps) : 30;
 
-  // Phase 1: 실시간 세그멘테이션 훅
+  // Phase 3: 온디바이스 당도 예측
+  const sweetness = useSweetnessPredictor();
+
+  // Phase 1: 실시간 세그멘테이션 훅 (+ Phase 3 sweetness config)
   const { hasPermission, segmentations, frameProcessor, cameraRef } =
-    useSegmentation(format);
+    useSegmentation(format, {
+      sweetnessModelRef: sweetness.sweetnessModelRef,
+      cropRequest: sweetness.cropRequest,
+      handleFeaturesFromWorklet: sweetness.handleFeaturesFromWorklet,
+    });
 
   // 프레임 크기 (카메라 Landscape 기준)
   const frameSize = {
@@ -58,9 +65,6 @@ export default function CameraView() {
     screenSize,
     frameSize,
   });
-
-  // Phase 2: 서버 API
-  const { sendAnalysisRequest } = useObjectAnalysis();
 
   // 모델 세그멘테이션이 업데이트되면 기존 당도 정보를 보존하면서 병합
   useEffect(() => {
@@ -81,16 +85,35 @@ export default function CameraView() {
     });
   }, [segmentations]);
 
-  // 터치 핸들러: 사과 터치 → 프레임 캡처 → 서버 API → 당도 업데이트
+  // Phase 3: 당도 예측 결과 수신 → UI 업데이트
+  useEffect(() => {
+    if (!sweetness.predictionResult) return;
+    const { appleId, sweetness: brix } = sweetness.predictionResult;
+    setEnrichedSegs((prev) =>
+      prev.map((seg) =>
+        seg.id === appleId
+          ? { ...seg, isLoading: false, sweetness: brix }
+          : seg
+      )
+    );
+    loadingIdsRef.current.delete(appleId);
+    console.log(`[Phase3] Apple #${appleId}: ${brix.toFixed(2)} Brix`);
+  }, [sweetness.predictionResult]);
+
+  // 터치 핸들러: 사과 터치 → 온디바이스 당도 예측 요청
   const handleOverlayTouch = useCallback(
-    async (screenX: number, screenY: number) => {
+    (screenX: number, screenY: number) => {
       const appleId = findAppleAtTouch(screenX, screenY);
       if (appleId === null) return;
 
       // 이미 로딩 중이면 무시
       if (loadingIdsRef.current.has(appleId)) return;
 
-      console.log(`[Phase2] Apple #${appleId} touched. Capturing photo...`);
+      // 터치한 사과의 bbox 가져오기
+      const touchedSeg = enrichedSegs.find((s) => s.id === appleId);
+      if (!touchedSeg) return;
+
+      console.log(`[Phase3] Apple #${appleId} touched. Requesting on-device prediction...`);
 
       // 로딩 상태 설정
       loadingIdsRef.current.add(appleId);
@@ -100,70 +123,10 @@ export default function CameraView() {
         )
       );
 
-      try {
-        // 1. 사진 캡처
-        if (!cameraRef.current) throw new Error('Camera not available');
-        const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-        const photoUri = `file://${photo.path}`;
-        console.log(`[Phase2] Photo captured: ${photoUri}`);
-
-        // 2. FormData 생성 (전체 이미지 전송 — 서버가 세그멘테이션+당도 예측)
-        const formData = new FormData();
-        formData.append('image', {
-          uri: photoUri,
-          name: `apple_${appleId}_${Date.now()}.jpg`,
-          type: 'image/jpeg',
-        } as any);
-
-        // 3. 서버 API 호출
-        console.log(`[Phase2] Sending to server...`);
-        const results = await sendAnalysisRequest(formData);
-        console.log(`[Phase2] Server response:`, results);
-
-        // 4. 응답에서 당도 추출 (첫 번째 결과 또는 가장 가까운 bbox 매칭)
-        let sweetness: number | undefined;
-        if (results && results.length > 0) {
-          // 터치한 사과의 bbox와 가장 가까운 서버 결과 매칭
-          const touchedSeg = enrichedSegs.find((s) => s.id === appleId);
-          if (touchedSeg && results.length > 1) {
-            // 여러 결과 중 bbox 중심 거리가 가장 가까운 것 선택
-            const tcx = (touchedSeg.bbox.xmin + touchedSeg.bbox.xmax) / 2;
-            const tcy = (touchedSeg.bbox.ymin + touchedSeg.bbox.ymax) / 2;
-            let minDist = Infinity;
-            for (const r of results) {
-              if (r.sugar_content == null) continue;
-              const rcx = (r.bbox.xmin + r.bbox.xmax) / 2;
-              const rcy = (r.bbox.ymin + r.bbox.ymax) / 2;
-              const dist = Math.sqrt((tcx - rcx) ** 2 + (tcy - rcy) ** 2);
-              if (dist < minDist) {
-                minDist = dist;
-                sweetness = r.sugar_content ?? undefined;
-              }
-            }
-          } else {
-            sweetness = results[0].sugar_content ?? undefined;
-          }
-        }
-
-        // 5. 당도 업데이트
-        setEnrichedSegs((prev) =>
-          prev.map((seg) =>
-            seg.id === appleId ? { ...seg, isLoading: false, sweetness } : seg
-          )
-        );
-        console.log(`[Phase2] Apple #${appleId} sweetness: ${sweetness ?? 'N/A'}`);
-      } catch (error: any) {
-        console.error(`[Phase2] Analysis failed for apple #${appleId}:`, error.message);
-        setEnrichedSegs((prev) =>
-          prev.map((seg) =>
-            seg.id === appleId ? { ...seg, isLoading: false } : seg
-          )
-        );
-      } finally {
-        loadingIdsRef.current.delete(appleId);
-      }
+      // 프레임 프로세서에 크롭 요청 (다음 프레임에서 처리)
+      sweetness.requestPrediction(appleId, touchedSeg.bbox);
     },
-    [findAppleAtTouch, cameraRef, sendAnalysisRequest, enrichedSegs]
+    [findAppleAtTouch, enrichedSegs, sweetness]
   );
 
   const hasApple = enrichedSegs.length > 0;

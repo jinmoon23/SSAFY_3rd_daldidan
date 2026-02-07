@@ -111,9 +111,47 @@ export const useImageProcessing = () => {
     });
   };
 
+  // Phase 3: bbox 크롭 → targetSize×targetSize float32 (0~1)
+  const cropAndResize = (
+    frame: any,
+    cropX: number,
+    cropY: number,
+    cropW: number,
+    cropH: number,
+    targetSize: number
+  ) => {
+    'worklet';
+    return resize(frame, {
+      scale: { width: targetSize, height: targetSize },
+      pixelFormat: 'rgb',
+      dataType: 'float32',
+      crop: { x: cropX, y: cropY, width: cropW, height: cropH },
+    });
+  };
+
+  // Phase 3: bbox 크롭 → targetSize×targetSize uint8
+  const cropAndResizeUint8 = (
+    frame: any,
+    cropX: number,
+    cropY: number,
+    cropW: number,
+    cropH: number,
+    targetSize: number
+  ) => {
+    'worklet';
+    return resize(frame, {
+      scale: { width: targetSize, height: targetSize },
+      pixelFormat: 'rgb',
+      dataType: 'uint8',
+      crop: { x: cropX, y: cropY, width: cropW, height: cropH },
+    });
+  };
+
   return {
     preprocessFrame,
     preprocessFrameForSeg,
+    cropAndResize,
+    cropAndResizeUint8,
     extractCroppedData,
     clamp,
     logWorklet,

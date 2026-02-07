@@ -49,3 +49,9 @@ xcuserdata/
 *.mobileprovision
 *.provisionprofile
 .venv
+
+# Model conversion artifacts
+scripts/*.onnx
+scripts/efficientnet_b0_tflite_out/
+FE/daldidan/assets/*.onnx
+FE/daldidan/constants/mlpWeights.json

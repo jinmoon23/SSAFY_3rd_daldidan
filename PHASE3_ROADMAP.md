@@ -383,77 +383,88 @@ Week 8:    Phase 3 — 통합 + 정확도 검증 + 성능 최적화
  
 ---
  
-### Phase 3: 완전 온디바이스 당도 예측 (3~5주)
- 
+### ✅ Phase 3 구현 완료 (완전 온디바이스 당도 예측)
+
 **목표**: 서버 API 완전 제거. 터치 시 온디바이스에서 즉시 당도 예측.
- 
-#### Step 3-1: EfficientNet-B0 TFLite 변환
- 
-```python
-# PyTorch에서 CNN 부분만 추출 → ONNX → TFLite
-class EfficientNetOnly(nn.Module):
-    def __init__(self, fusion_model):
-        super().__init__()
-        self.cnn = fusion_model.cnn  # classifier=Identity → 1280차원 출력
-    def forward(self, x):
-        return self.cnn(x)
- 
-# 변환 경로: .pth → ONNX → SavedModel → TFLite (float16)
+
+#### Step 3-1: EfficientNet-B0 TFLite 변환 ✅
+
+- `scripts/convert_efficientnet_to_tflite.py`: .pth → ONNX (opset 13) → onnx2tf → TFLite (float16)
+- FusionModel에서 `EfficientNetOnly` 래퍼로 CNN 부분만 추출
+- 입력: `[1, 224, 224, 3]` / 출력: `[1, 1280]`
+- 3단계 fallback (기본 → -kat → 최소옵션), SavedModel 직접 변환 fallback 포함
+- ⚠️ `assets/efficientnet_b0_apple.tflite` 변환 스크립트 실행 필요
+
+#### Step 3-2: MLP Head → JS 구현 ✅
+
+- `hooks/useSweetnessPredictor.ts`: `mlpPredict()` 함수
+- FC1: [128×1286] + bias → ReLU, FC2: [1×128] + bias → Brix
+- `constants/mlpWeights.json`에서 가중치 로드 (fc1.weight, fc1.bias, fc2.weight, fc2.bias)
+
+#### Step 3-3: Manual Features → JS 구현 ✅
+
+- `hooks/useManualFeatures.ts`: `extractManualFeaturesWorklet()` (Worklet 호환)
+- RGB→YCbCr 변환 (OpenCV COLOR_BGR2YCrCb 호환, 서버의 swapped naming 재현)
+- Rn, C, ycbcr_diff, ycbcr_norm: 서버 로직 동일 구현
+- cat02_first: 0.0 고정 (서버와 동일)
+- cluster_shadow: GLCM contrast 완전 구현 (distance=1, angle=0, levels=32, symmetric)
+- `scaleManualFeatures()`: StandardScaler 정규화
+
+#### Step 3-4: Scaler/MLP 가중치 추출 스크립트 ✅
+
+- `scripts/extract_scaler.py` → `scalerValues.json` (이미 생성됨)
+- `scripts/extract_mlp_weights.py` → `mlpWeights.json` (이미 생성됨)
+- `scripts/convert_efficientnet_to_tflite.py` → `efficientnet_b0_apple.tflite` (실행 필요)
+
+#### Phase 3 데이터 흐름
+
 ```
- 
-#### Step 3-2: MLP Head → JS 구현
- 
-```typescript
-// MLP 가중치를 JSON으로 추출 → JS 행렬곱
-// FC1: [128×1286] + bias[128] → ReLU
-// FC2: [1×128] + bias[1] → 당도(Brix)
-function mlpPredict(cnnFeatures: number[], manualFeatures: number[]): number {
-  const input = [...cnnFeatures, ...manualFeatures]; // [1286]
-  // FC1 + ReLU
-  const hidden = new Array(128);
-  for (let i = 0; i < 128; i++) {
-    let sum = MLP_WEIGHTS.fc1_bias[i];
-    for (let j = 0; j < 1286; j++) sum += MLP_WEIGHTS.fc1_weight[i][j] * input[j];
-    hidden[i] = Math.max(0, sum);
-  }
-  // FC2
-  let output = MLP_WEIGHTS.fc2_bias[0];
-  for (let i = 0; i < 128; i++) output += MLP_WEIGHTS.fc2_weight[0][i] * hidden[i];
-  return output;
-}
+사용자 터치
+  ↓ findAppleAtTouch(screenX, screenY) → appleId
+  ↓ sweetness.requestPrediction(appleId, bbox)
+  ↓ cropRequest SharedValue 설정
+  ↓
+Frame Processor (다음 프레임):
+  ├─ cropAndResize(frame, bbox, 224×224, float32)
+  ├─ ImageNet 정규화 (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
+  ├─ EfficientNet-B0 runSync → 1280 CNN features
+  ├─ cropAndResizeUint8(frame, bbox, 64×64)
+  ├─ extractManualFeaturesWorklet → 6 features
+  └─ handleFeaturesFromWorklet → JS 전송
+  ↓
+JS Thread:
+  ├─ scaleManualFeatures(6 features)
+  ├─ mlpPredict([1280 CNN + 6 scaled]) → 당도 (Brix)
+  └─ setPredictionResult → UI 업데이트
 ```
- 
-#### Step 3-3: Manual Features → JS 구현
- 
-- RGB→Lab, RGB→YCbCr: 공식 기반 변환 (순수 수학)
-- Scaler: `scaler.pkl`에서 mean/std 추출 → 상수
-- GLCM: 0.0 고정 (서버의 cat02_first도 0.0)
-- 푸른 사과 보정: Lab 색공간 조건문 그대로 포팅
- 
-#### Step 3-4: Scaler/MLP 가중치 추출 스크립트
- 
-```python
-# scripts/extract_scaler.py → scalerValues.json
-# scripts/extract_mlp_weights.py → mlpWeights.json (FC1:128×1286, FC2:1×128)
-# scripts/convert_efficientnet_to_tflite.py → efficientnet_b0_apple_fp16.tflite
-```
- 
-#### Phase 3 파일 변경
- 
-```
-🆕 hooks/useSweetnessPredictor.ts      — 통합 당도 예측 파이프라인
-🆕 hooks/useManualFeatures.ts          — 색공간 변환+특징 추출
-🆕 constants/mlpWeights.json           — MLP 가중치 (~660KB)
-🆕 constants/scalerValues.json         — Scaler mean/std
-🆕 assets/efficientnet_b0_apple.tflite — CNN 모델 (~15MB)
-✏️ components/RealtimeSegOverlay.tsx    — 서버→로컬 예측 교체
-✏️ components/CameraViewNoDetect.tsx    — 서버 코드 제거
-✏️ hooks/useTouchToApple.ts            — 서버→로컬 호출 교체
-🗑️ hooks/useAnalysisApiHandler.ts      — 서버 API 상태관리 불필요
-🗑️ hooks/useObjectAnalysis.ts          — 서버 fetch 불필요
-🗑️ constants/api.ts                    — API 엔드포인트 불필요
-🗑️ components/AnalyzedResultOverlay.tsx — RealtimeSegOverlay로 대체
-```
+
+#### Phase 3 신규 파일
+
+| 파일 | 역할 |
+|------|------|
+| `hooks/useManualFeatures.ts` | Worklet 호환 수동 특징 추출 (6차원) + GLCM contrast + StandardScaler |
+| `hooks/useSweetnessPredictor.ts` | EfficientNet 모델 로딩 + MLP 추론 + cropRequest 관리 |
+| `scripts/convert_efficientnet_to_tflite.py` | .pth → ONNX → onnx2tf → TFLite 전체 파이프라인 |
+| `scripts/extract_mlp_weights.py` | MLP 가중치 → JSON 추출 + 검증 |
+| `scripts/extract_scaler.py` | StandardScaler mean/std → JSON 추출 + 검증 |
+| `constants/mlpWeights.json` | MLP 가중치 (FC1[128×1286], FC2[1×128]) |
+| `constants/scalerValues.json` | Scaler mean/std (6차원) |
+
+#### Phase 3 변경 파일
+
+| 파일 | 변경 |
+|------|------|
+| `hooks/useImageProcessing.ts` | `cropAndResize()`, `cropAndResizeUint8()` bbox 크롭 함수 추가 |
+| `hooks/useSegmentation.ts` | `SweetnessConfig` 파라미터, 프레임 프로세서에 크롭+EfficientNet+수동특징 추론 통합 |
+| `components/CameraViewNoDetect.tsx` | `useObjectAnalysis` → `useSweetnessPredictor` 교체, 서버 코드 완전 제거 |
+
+#### 남은 작업
+
+- [ ] `scripts/convert_efficientnet_to_tflite.py` 실행 → `efficientnet_b0_apple.tflite` 생성
+- [ ] 생성된 TFLite를 `FE/daldidan/assets/efficientnet_b0_apple.tflite`에 배치
+- [ ] 실기기 테스트 (EfficientNet GPU Delegate 호환성)
+- [ ] 당도 정확도 검증 (서버 대비 MAE ≤0.8 Brix 목표)
+- [ ] 푸른 사과 보정 구현 (Lab 색공간 조건문)
  
 ---
  
