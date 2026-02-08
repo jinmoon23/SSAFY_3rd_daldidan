@@ -104,35 +104,37 @@ for (let i = 0; i < 128; i++) {
 
 #### 구현 아키텍처
 
-```
-터치 이벤트 (appleId=3, bbox)
-    │
-    ▼ requestPrediction()
-    │
-    ├─ ensembleMap.set(3, { predictions: [], bbox })    ← 사과별 독립 버퍼
-    └─ cropQueue에 크롭 요청 1개 push
-           │
-           ▼ FrameProcessor (Worklet Thread, 다음 프레임에서 소비)
-           │
-           ├─ cropQueue.shift() → bbox 기반 크롭
-           ├─ 224×224 float32 → ImageNet 정규화 → EfficientNet-B0 → cnnFeatures [1280]
-           ├─ 64×64 uint8 → extractManualFeaturesWorklet() → manualFeatures [6]
-           └─ handleFeaturesFromWorklet() → JS Thread로 전달
-                  │
-                  ▼ JS Thread
-                  │
-                  ├─ scaleManualFeatures() → StandardScaler 정규화
-                  ├─ mlpPredict(cnnFeatures, scaled) → 개별 Brix 값
-                  ├─ ensemble.predictions.push(brix)
-                  │
-                  ├─ predictions.length < 5?
-                  │     └─ cropQueue에 다음 요청 push ← 자가 루프 패턴
-                  │
-                  └─ predictions.length === 5?
-                        ├─ computeMedian(predictions) → 최종 당도 확정
-                        ├─ storeFingerprint() → Fingerprint 캐시 저장 (→ 2번과 연결)
-                        ├─ ensembleMap.delete(appleId) → 버퍼 정리
-                        └─ setPredictionResult() → UI에 결과 표시
+```mermaid
+flowchart TD
+    Touch["👆 터치 이벤트\n(appleId=3, bbox)"] --> RP["requestPrediction()"]
+
+    subgraph JSThread1["JS Thread — 앙상블 시작"]
+        RP --> EM["ensembleMap.set(3,\n{ predictions:[], bbox })"]
+        RP --> CQ1["cropQueue.push(\n{ appleId, bbox })"]
+    end
+
+    CQ1 --> FP
+
+    subgraph WorkletThread["Worklet Thread — FrameProcessor"]
+        FP["cropQueue.shift()\nbbox 기반 크롭"] --> CNN["224×224 float32\nImageNet 정규화\nEfficientNet-B0\n→ cnnFeatures [1280]"]
+        FP --> MF["64×64 uint8\nextractManualFeatures\n→ manualFeatures [6]"]
+    end
+
+    CNN --> Bridge["handleFeaturesFromWorklet()\nWorklets.createRunOnJS()"]
+    MF --> Bridge
+
+    subgraph JSThread2["JS Thread — MLP 추론 + 앙상블"]
+        Bridge --> Scale["scaleManualFeatures()\nStandardScaler 정규화"]
+        Scale --> MLP["mlpPredict(cnn, scaled)\n→ 개별 Brix 값"]
+        MLP --> Push["ensemble.predictions\n.push(brix)"]
+        Push --> Check{"predictions.length\n>= 5?"}
+        Check -- "❌ No" --> Loop["cropQueue.push()\n다음 크롭 요청\n(자가 루프)"]
+        Check -- "✅ Yes" --> Median["computeMedian()\n→ 최종 당도 확정"]
+        Median --> Store["storeFingerprint()\n→ Fingerprint 캐시 저장"]
+        Median --> Result["setPredictionResult()\n→ UI 당도 표시"]
+    end
+
+    Loop --> FP
 ```
 
 #### 핵심 코드 흐름
@@ -307,43 +309,39 @@ IoU 기반 Stable ID는 **위치(bbox) 정보만** 사용합니다. 카메라 �
 
 #### 구현 아키텍처
 
-```
-[당도 확정 시 — 앙상블 5프레임 완료 직후]
-    │
-    ▼ storeFingerprint()
-    │
-    fingerprintCache[]에 저장:
-      ├─ cnnFeatures [1280]      ← EfficientNet 마지막 추론의 특징벡터
-      ├─ normalizedCenter {x, y} ← bbox 중심을 프레임 크기로 정규화 (0~1)
-      ├─ sweetness: 14.2         ← 확정된 당도 (Brix)
-      └─ timestamp               ← 저장 시각
+```mermaid
+flowchart TD
+    subgraph Phase1["당도 확정 시 — 앙상블 5프레임 완료 직후"]
+        Confirm["당도 확정\n14.2 Brix"] --> StoreFP["storeFingerprint()"]
+        StoreFP --> Cache["fingerprintCache[]에 저장"]
+        Cache --> D1["cnnFeatures [1280]"]
+        Cache --> D2["normalizedCenter {x, y}"]
+        Cache --> D3["sweetness: 14.2"]
+        Cache --> D4["timestamp"]
+    end
 
-        ────────── 카메라 이동 후 사과 재진입 ──────────
+    Phase1 -.->|"📱 카메라 이동 후\n사과 재진입"| Phase2
 
-[새 사과 감지 시 (당도 없는 새 ID)]
-    │
-    ▼ requestFingerprint(newAppleId, bbox)
-    │
-    └─ fingerprintQueue에 push
-           │
-           ▼ FrameProcessor (Worklet Thread)
-           │
-           ├─ 224×224 크롭 → ImageNet 정규화
-           ├─ EfficientNet-B0 추론 → cnnFeatures [1280]
-           │   (Manual Features / MLP는 생략 — CNN 벡터만 빠르게 추출)
-           └─ handleFingerprintFromWorklet() → JS Thread
-                  │
-                  ▼ matchFingerprint()
-                  │
-                  ├─ 캐시 전체 순회:
-                  │   score = 0.8 × cosineSim(cnn) + 0.2 × spatialSim(center)
-                  │
-                  ├─ bestScore ≥ 0.82?
-                  │     → ✅ 매칭 성공! → setFingerprintMatch({appleId, sweetness})
-                  │     → UI에서 기존 당도 즉시 복원 (재터치 불필요)
-                  │
-                  └─ bestScore < 0.82?
-                        → ❌ 매칭 실패 → 새 사과로 취급 (터치 대기)
+    subgraph Phase2["새 사과 감지 시 — 당도 없는 새 ID"]
+        Detect["새 사과 감지\n(id=7, 당도 없음)"] --> ReqFP["requestFingerprint()\nfingerprintQueue.push()"]
+    end
+
+    ReqFP --> WorkletFP
+
+    subgraph Worklet["Worklet Thread — FrameProcessor"]
+        WorkletFP["fingerprintQueue.shift()\nbbox 기반 224×224 크롭"] --> Norm["ImageNet 정규화"]
+        Norm --> Infer["EfficientNet-B0 추론\n→ cnnFeatures [1280]\n(MLP/Manual 생략)"]
+    end
+
+    Infer --> BridgeFP["handleFingerprintFromWorklet()\nWorklets.createRunOnJS()"]
+
+    subgraph JSMatch["JS Thread — Fingerprint 매칭"]
+        BridgeFP --> Match["matchFingerprint()\n캐시 전체 순회"]
+        Match --> Score["score = 0.8 × cosineSim(cnn)\n+ 0.2 × spatialSim(center)"]
+        Score --> Decision{"bestScore\n>= 0.82?"}
+        Decision -- "✅ 매칭 성공" --> Restore["setFingerprintMatch()\n→ UI에 14.2 Brix 즉시 복원\n(재터치 불필요)"]
+        Decision -- "❌ 매칭 실패" --> NewApple["새 사과로 취급\n(터치 대기)"]
+    end
 ```
 
 #### 핵심 코드 흐름
