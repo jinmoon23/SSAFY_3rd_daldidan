@@ -4,54 +4,7 @@
 
 ---
 
-## 1. 시스템 전체 아키텍처
-
-```mermaid
-graph TB
-    subgraph Mobile["Mobile App - React Native Expo"]
-        CAM["Camera Frame"]
-        FP["Frame Processor\nWorklet Thread"]
-        YOLO_D["YOLOv8n-seg\nTFLite 13.8MB"]
-        ENET["EfficientNet-B0\nTFLite 8MB"]
-        MLP["MLP Inference\nJS Thread"]
-        UI["UI Rendering\nSkia Canvas"]
-    end
-
-    subgraph Server["Backend Server - AWS EC2"]
-        NGINX["Nginx Reverse Proxy"]
-        BE["BE Gateway\nFastAPI"]
-        AI["AI Server\nFastAPI GPU"]
-        YOLO_S["YOLOv8l-seg\nPyTorch"]
-        CNN_S["EfficientNet-B0\nMLP PyTorch"]
-    end
-
-    subgraph Infra["Infrastructure"]
-        JENKINS["Jenkins CI/CD"]
-        DOCKER["Docker"]
-        GITLAB["GitLab"]
-    end
-
-    CAM --> FP
-    FP --> YOLO_D
-    FP --> ENET
-    YOLO_D --> UI
-    ENET --> MLP
-    MLP --> UI
-
-    Mobile -.-> NGINX
-    NGINX --> BE
-    BE --> AI
-    AI --> YOLO_S
-    AI --> CNN_S
-
-    GITLAB --> JENKINS
-    JENKINS --> DOCKER
-    DOCKER --> Server
-```
-
----
-
-## 2. 온디바이스 추론 파이프라인 (Phase 3 — 현재)
+## 1. 온디바이스 추론 파이프라인 (Phase 3 — 현재)
 
 ```mermaid
 flowchart LR
@@ -99,7 +52,7 @@ flowchart LR
 
 ---
 
-## 3. FE 컴포넌트 계층 구조
+## 2. FE 컴포넌트 계층 구조
 
 ```mermaid
 graph TD
@@ -126,7 +79,7 @@ graph TD
 
 ---
 
-## 4. FE 커스텀 훅 의존성
+## 3. FE 커스텀 훅 의존성
 
 ```mermaid
 graph LR
@@ -166,7 +119,7 @@ graph LR
 
 ---
 
-## 5. 핵심 데이터 흐름 — 터치 → 당도 예측
+## 4. 핵심 데이터 흐름 — 터치 → 당도 예측
 
 ```mermaid
 sequenceDiagram
@@ -207,7 +160,7 @@ sequenceDiagram
 
 ---
 
-## 6. Fingerprint 재인식 흐름 (카메라 이동 후 복귀)
+## 5. Fingerprint 재인식 흐름 (카메라 이동 후 복귀)
 
 ```mermaid
 sequenceDiagram
@@ -241,7 +194,7 @@ sequenceDiagram
 
 ---
 
-## 7. 멀티 사과 동시 처리 아키텍처
+## 6. 멀티 사과 동시 처리 아키텍처
 
 ```mermaid
 flowchart TD
@@ -269,61 +222,7 @@ flowchart TD
 
 ---
 
-## 8. 백엔드 API 아키텍처 (Phase 1 Legacy)
-
-```mermaid
-graph LR
-    subgraph Client["Mobile"]
-        APP["React Native App"]
-    end
-
-    subgraph Gateway["BE Gateway - FastAPI 8000"]
-        R1["GET /health"]
-        R2["POST /dummy_predict"]
-    end
-
-    subgraph AIServer["AI Server - FastAPI 8001"]
-        R3["GET /health"]
-        R4["POST /predict"]
-        DET["detect_service\nYOLOv8l-seg"]
-        PRED["predict_service\nCNN+MLP Fusion"]
-    end
-
-    APP --> Gateway
-    Gateway --> AIServer
-    R4 --> DET
-    DET --> PRED
-    PRED --> R4
-```
-
-### AI 서버 추론 파이프라인
-
-```mermaid
-flowchart LR
-    IMG["Image Upload"]
-    DET["YOLOv8l-seg"]
-    SEG["Segmentation\nMask"]
-    CROP["Mask Crop"]
-    CNN["EfficientNet-B0\nFeature Extractor"]
-    MF["Manual Features\nRGB YCbCr GLCM"]
-    FUSION["CNN 1280 + Manual 6\n1286-dim"]
-    MLP_S["MLP\n1286-128-1"]
-    BRIX["Sweetness Brix"]
-
-    IMG --> DET
-    DET --> SEG
-    SEG --> CROP
-    CROP --> CNN
-    CROP --> MF
-    CNN --> FUSION
-    MF --> FUSION
-    FUSION --> MLP_S
-    MLP_S --> BRIX
-```
-
----
-
-## 9. 파일 구조 맵
+## 7. 파일 구조 맵
 
 ```
 📁 SSAFY_3rd_daldidan/
@@ -403,7 +302,7 @@ flowchart LR
 
 ---
 
-## 10. 기술 스택 요약
+## 8. 기술 스택 요약
 
 | 계층 | 기술 | 용도 |
 |---|---|---|
@@ -422,7 +321,7 @@ flowchart LR
 
 ---
 
-## 11. 진화 단계
+## 9. 진화 단계
 
 | Phase | 방식 | 상태 |
 |---|---|---|
@@ -430,3 +329,104 @@ flowchart LR
 | **Phase 2** | 온디바이스 감지 + 서버 예측: EfficientDet (온디바이스) → 크롭 → API | Legacy |
 | **Phase 3** | **완전 온디바이스**: YOLOv8n-seg + EfficientNet-B0 + MLP 전부 디바이스에서 실행 | **현재 운영** |
 | **Phase 3.5** | 멀티프레임 앙상블 (5프레임 중앙값) + Fingerprint 재인식 + 멀티사과 동시 처리 | **현재 구현 완료** |
+
+---
+
+## 10. Legacy: 시스템 전체 아키텍처 (Phase 1)
+
+```mermaid
+graph TB
+    subgraph Mobile["Mobile App - React Native Expo"]
+        CAM["Camera Frame"]
+        FP["Frame Processor\nWorklet Thread"]
+        YOLO_D["YOLOv8n-seg\nTFLite 13.8MB"]
+        ENET["EfficientNet-B0\nTFLite 8MB"]
+        MLP["MLP Inference\nJS Thread"]
+        UI["UI Rendering\nSkia Canvas"]
+    end
+
+    subgraph Server["Backend Server - AWS EC2"]
+        NGINX["Nginx Reverse Proxy"]
+        BE["BE Gateway\nFastAPI"]
+        AI["AI Server\nFastAPI GPU"]
+        YOLO_S["YOLOv8l-seg\nPyTorch"]
+        CNN_S["EfficientNet-B0\nMLP PyTorch"]
+    end
+
+    subgraph Infra["Infrastructure"]
+        JENKINS["Jenkins CI/CD"]
+        DOCKER["Docker"]
+        GITLAB["GitLab"]
+    end
+
+    CAM --> FP
+    FP --> YOLO_D
+    FP --> ENET
+    YOLO_D --> UI
+    ENET --> MLP
+    MLP --> UI
+
+    Mobile -.-> NGINX
+    NGINX --> BE
+    BE --> AI
+    AI --> YOLO_S
+    AI --> CNN_S
+
+    GITLAB --> JENKINS
+    JENKINS --> DOCKER
+    DOCKER --> Server
+```
+
+---
+
+## 11. Legacy: 백엔드 API 아키텍처 (Phase 1)
+
+```mermaid
+graph LR
+    subgraph Client["Mobile"]
+        APP["React Native App"]
+    end
+
+    subgraph Gateway["BE Gateway - FastAPI 8000"]
+        R1["GET /health"]
+        R2["POST /dummy_predict"]
+    end
+
+    subgraph AIServer["AI Server - FastAPI 8001"]
+        R3["GET /health"]
+        R4["POST /predict"]
+        DET["detect_service\nYOLOv8l-seg"]
+        PRED["predict_service\nCNN+MLP Fusion"]
+    end
+
+    APP --> Gateway
+    Gateway --> AIServer
+    R4 --> DET
+    DET --> PRED
+    PRED --> R4
+```
+
+### AI 서버 추론 파이프라인
+
+```mermaid
+flowchart LR
+    IMG["Image Upload"]
+    DET["YOLOv8l-seg"]
+    SEG["Segmentation\nMask"]
+    CROP["Mask Crop"]
+    CNN["EfficientNet-B0\nFeature Extractor"]
+    MF["Manual Features\nRGB YCbCr GLCM"]
+    FUSION["CNN 1280 + Manual 6\n1286-dim"]
+    MLP_S["MLP\n1286-128-1"]
+    BRIX["Sweetness Brix"]
+
+    IMG --> DET
+    DET --> SEG
+    SEG --> CROP
+    CROP --> CNN
+    CROP --> MF
+    CNN --> FUSION
+    MF --> FUSION
+    FUSION --> MLP_S
+    MLP_S --> BRIX
+```
