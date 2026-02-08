@@ -181,39 +181,48 @@ Camera Frame (1920×1080, 30fps)
 
 ### 현재 운영 아키텍처 (Phase 3.5 — 완전 온디바이스)
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                   Mobile App (React Native + Expo)                       │
-│                                                                         │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │                    Worklet Thread (Frame Processor)               │   │
-│   │                                                                   │   │
-│   │   Camera Frame ──→ YOLOv8n-seg ──→ NMS + Mask ──→ Polygons      │   │
-│   │        │                                                          │   │
-│   │        ├──→ EfficientNet-B0 (224×224 crop) ──→ CNN [1280]        │   │
-│   │        └──→ Manual Features (64×64 crop)  ──→ Features [6]       │   │
-│   └────────────────────────────┬────────────────────────────────────┘   │
-│                                │ Worklets.createRunOnJS()               │
-│   ┌────────────────────────────▼────────────────────────────────────┐   │
-│   │                    JS Thread                                      │   │
-│   │                                                                   │   │
-│   │   Stable ID (IoU) ──→ MLP (1286→128→1) ──→ Ensemble (median)    │   │
-│   │                              │                                    │   │
-│   │                     Fingerprint Cache ←─→ Re-ID 매칭              │   │
-│   └────────────────────────────┬────────────────────────────────────┘   │
-│                                │                                        │
-│   ┌────────────────────────────▼────────────────────────────────────┐   │
-│   │                    UI Thread                                      │   │
-│   │                                                                   │   │
-│   │   Skia Canvas (마스크/bbox) ──→ 당도 Tooltip ──→ 터치 인터랙션   │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│   📦 온디바이스 모델: yolov8n_seg.tflite (13.8MB)                       │
-│                       efficientnet_b0_apple.tflite (8MB)                │
-│                       mlpWeights.bin (3.7MB)                            │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph WorkletThread["Worklet Thread"]
+        A["Camera Frame\n1920x1080"]
+        B["YOLOv8n-seg\n640x640"]
+        C["Postprocess\nNMS + Mask"]
+        D["EfficientNet-B0\n224x224 Crop"]
+        E["Manual Features\n64x64 Crop"]
+    end
 
-        ※ 서버 연결 불필요 — 완전 오프라인 동작
+    subgraph JSThread["JS Thread"]
+        F["Stable ID\nIoU Matching"]
+        G["MLP Inference\n1286-128-1"]
+        H["Ensemble Buffer\n5 Frame Median"]
+        I["Fingerprint\nCache Match"]
+        J["UI State Update\nenrichedSegs"]
+    end
+
+    subgraph UIThread["UI Thread"]
+        K["Skia Canvas"]
+        L["Sweetness Tooltip"]
+    end
+
+    A --> B
+    B --> C
+    C --> F
+    F --> J
+
+    A --> D
+    A --> E
+    D --> G
+    E --> G
+    G --> H
+    H --> J
+    H --> D
+
+    A --> D
+    D --> I
+    I --> J
+
+    J --> K
+    J --> L
 ```
 
 ### Legacy 아키텍처 (Phase 1 — 서버 의존)
