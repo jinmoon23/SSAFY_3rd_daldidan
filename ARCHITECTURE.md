@@ -8,37 +8,37 @@
 
 ```mermaid
 graph TB
-    subgraph Mobile["📱 Mobile App (React Native + Expo)"]
-        CAM[카메라 프레임]
-        FP["Frame Processor\n(Worklet Thread)"]
-        YOLO_D["YOLOv8n-seg\nTFLite (13.8MB)"]
-        ENET["EfficientNet-B0\nTFLite (8MB)"]
-        MLP["MLP 추론\n(JS Thread)"]
-        UI["UI 렌더링\n(Skia Canvas)"]
+    subgraph Mobile["Mobile App - React Native Expo"]
+        CAM["Camera Frame"]
+        FP["Frame Processor\nWorklet Thread"]
+        YOLO_D["YOLOv8n-seg\nTFLite 13.8MB"]
+        ENET["EfficientNet-B0\nTFLite 8MB"]
+        MLP["MLP Inference\nJS Thread"]
+        UI["UI Rendering\nSkia Canvas"]
     end
 
-    subgraph Server["🖥️ Backend Server (AWS EC2)"]
-        NGINX[Nginx Reverse Proxy]
-        BE["BE Gateway\n(FastAPI)"]
-        AI["AI Server\n(FastAPI + GPU)"]
-        YOLO_S["YOLOv8l-seg\n(PyTorch)"]
-        CNN_S["EfficientNet-B0\n+ MLP (PyTorch)"]
+    subgraph Server["Backend Server - AWS EC2"]
+        NGINX["Nginx Reverse Proxy"]
+        BE["BE Gateway\nFastAPI"]
+        AI["AI Server\nFastAPI GPU"]
+        YOLO_S["YOLOv8l-seg\nPyTorch"]
+        CNN_S["EfficientNet-B0\nMLP PyTorch"]
     end
 
-    subgraph Infra["🔧 Infrastructure"]
-        JENKINS[Jenkins CI/CD]
-        DOCKER[Docker]
-        GITLAB[GitLab]
+    subgraph Infra["Infrastructure"]
+        JENKINS["Jenkins CI/CD"]
+        DOCKER["Docker"]
+        GITLAB["GitLab"]
     end
 
-    CAM -->|매 프레임| FP
-    FP -->|15프레임당 1회| YOLO_D
-    FP -->|크롭 요청 시| ENET
-    YOLO_D -->|세그멘테이션 결과| UI
-    ENET -->|1280-dim features| MLP
-    MLP -->|당도 Brix| UI
+    CAM --> FP
+    FP --> YOLO_D
+    FP --> ENET
+    YOLO_D --> UI
+    ENET --> MLP
+    MLP --> UI
 
-    Mobile -.->|REST API /predict\n(Phase 1 Legacy)| NGINX
+    Mobile -.-> NGINX
     NGINX --> BE
     BE --> AI
     AI --> YOLO_S
@@ -55,43 +55,43 @@ graph TB
 
 ```mermaid
 flowchart LR
-    subgraph WorkletThread["🔧 Worklet Thread (매 프레임)"]
-        A["📷 카메라 프레임\n(1920×1080)"]
-        B["YOLOv8n-seg\n640×640 입력"]
-        C["후처리\n(NMS + 마스크)"]
-        D["EfficientNet-B0\n224×224 크롭"]
-        E["Manual Features\n64×64 크롭"]
+    subgraph WorkletThread["Worklet Thread"]
+        A["Camera Frame\n1920x1080"]
+        B["YOLOv8n-seg\n640x640"]
+        C["Postprocess\nNMS + Mask"]
+        D["EfficientNet-B0\n224x224 Crop"]
+        E["Manual Features\n64x64 Crop"]
     end
 
-    subgraph JSThread["📋 JS Thread"]
-        F["Stable ID 할당\n(IoU 매칭)"]
-        G["MLP 추론\n(1286→128→1)"]
-        H["앙상블 버퍼\n(5프레임 중앙값)"]
-        I["Fingerprint\n캐시 매칭"]
-        J["UI 상태 업데이트\n(enrichedSegs)"]
+    subgraph JSThread["JS Thread"]
+        F["Stable ID\nIoU Matching"]
+        G["MLP Inference\n1286-128-1"]
+        H["Ensemble Buffer\n5 Frame Median"]
+        I["Fingerprint\nCache Match"]
+        J["UI State Update\nenrichedSegs"]
     end
 
-    subgraph UIThread["🎨 UI Thread"]
-        K["Skia Canvas\n마스크 + bbox"]
-        L["당도 툴팁\n표시"]
+    subgraph UIThread["UI Thread"]
+        K["Skia Canvas"]
+        L["Sweetness Tooltip"]
     end
 
-    A -->|15프레임마다| B
+    A --> B
     B --> C
-    C -->|SegmentationResult[]| F
+    C --> F
     F --> J
 
-    A -->|cropQueue 소비| D
-    A -->|cropQueue 소비| E
-    D -->|CNN features 1280| G
-    E -->|Manual features 6| G
+    A --> D
+    A --> E
+    D --> G
+    E --> G
     G --> H
-    H -->|5회 완료 → median| J
-    H -->|미완료 → 큐에 재요청| D
+    H --> J
+    H --> D
 
-    A -->|fingerprintQueue 소비| D
-    D -->|CNN features| I
-    I -->|매칭 성공 → 당도 복원| J
+    A --> D
+    D --> I
+    I --> J
 
     J --> K
     J --> L
@@ -245,26 +245,26 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    subgraph Queue["cropQueue (SharedValue — JSON 배열)"]
-        Q1["{A, bbox_a}"]
-        Q2["{B, bbox_b}"]
-        Q3["{A, bbox_a}"]
-        Q4["{B, bbox_b}"]
+    subgraph Queue["cropQueue - JSON Array"]
+        Q1["Apple A, bbox_a"]
+        Q2["Apple B, bbox_b"]
+        Q3["Apple A, bbox_a"]
+        Q4["Apple B, bbox_b"]
     end
 
-    subgraph EnsembleMap["ensembleMapRef (Map)"]
-        E_A["Apple A\npredictions: [12.1, 12.3]\n2/5"]
-        E_B["Apple B\npredictions: [14.0]\n1/5"]
+    subgraph EnsembleMap["ensembleMapRef - Map"]
+        E_A["Apple A\npredictions 2/5"]
+        E_B["Apple B\npredictions 1/5"]
     end
 
     subgraph FP["Frame Processor"]
-        FRAME["매 프레임: queue.shift()\n→ 1개만 소비"]
+        FRAME["queue.shift\n1개씩 소비"]
     end
 
-    Queue -->|shift()| FRAME
-    FRAME -->|CNN features + manual| EnsembleMap
-    EnsembleMap -->|5개 완료 → median| RESULT["predictionResult\n{appleId, sweetness}"]
-    EnsembleMap -->|미완료 → 큐 재추가| Queue
+    Queue --> FRAME
+    FRAME --> EnsembleMap
+    EnsembleMap --> RESULT["predictionResult"]
+    EnsembleMap --> Queue
 ```
 
 ---
@@ -273,42 +273,42 @@ flowchart TD
 
 ```mermaid
 graph LR
-    subgraph Client["📱 Mobile"]
-        APP[React Native App]
+    subgraph Client["Mobile"]
+        APP["React Native App"]
     end
 
-    subgraph Gateway["BE Gateway (FastAPI :8000)"]
+    subgraph Gateway["BE Gateway - FastAPI 8000"]
         R1["GET /health"]
         R2["POST /dummy_predict"]
     end
 
-    subgraph AIServer["AI Server (FastAPI :8001)"]
+    subgraph AIServer["AI Server - FastAPI 8001"]
         R3["GET /health"]
         R4["POST /predict"]
-        DET["detect_service.py\nYOLOv8l-seg (PyTorch)"]
-        PRED["predict_service.py\nCNN+MLP Fusion"]
+        DET["detect_service\nYOLOv8l-seg"]
+        PRED["predict_service\nCNN+MLP Fusion"]
     end
 
-    APP -->|REST API| Gateway
+    APP --> Gateway
     Gateway --> AIServer
     R4 --> DET
-    DET -->|사과 bbox + seg| PRED
-    PRED -->|sugar_content (Brix)| R4
+    DET --> PRED
+    PRED --> R4
 ```
 
 ### AI 서버 추론 파이프라인
 
 ```mermaid
 flowchart LR
-    IMG["📷 이미지 업로드"]
-    DET["YOLOv8l-seg\n(yolov8_pt, version=l)"]
-    SEG["세그멘테이션 마스크\n추출"]
-    CROP["마스크 기반 크롭"]
+    IMG["Image Upload"]
+    DET["YOLOv8l-seg"]
+    SEG["Segmentation\nMask"]
+    CROP["Mask Crop"]
     CNN["EfficientNet-B0\nFeature Extractor"]
-    MF["Manual Features\n(RGB, YCbCr, GLCM)"]
-    FUSION["CNN 1280 + Manual 6\n= 1286-dim"]
-    MLP_S["MLP\n(1286→128→1)"]
-    BRIX["당도 (Brix)"]
+    MF["Manual Features\nRGB YCbCr GLCM"]
+    FUSION["CNN 1280 + Manual 6\n1286-dim"]
+    MLP_S["MLP\n1286-128-1"]
+    BRIX["Sweetness Brix"]
 
     IMG --> DET
     DET --> SEG
