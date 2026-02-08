@@ -497,7 +497,7 @@ const handleFingerprintFromWorklet = useRef(
 |---|---|---|
 | `CNN_WEIGHT` | **0.8** | 같은 사과는 조명/각도가 바뀌어도 코사인 유사도 **0.9 이상** 유지. 다른 사과와는 **0.7 이하**. 시각적 유사성이 가장 신뢰할 수 있는 지표 |
 | `SPATIAL_WEIGHT` | **0.2** | 동일 장면에서 비슷하게 생긴 두 사과가 있을 때 **위치로 구분** 가능. 보조 지표 역할 |
-| `MATCH_THRESHOLD` | **0.82** | CNN만으로 0.9 이상이면 `0.8×0.9 + 0.2×0.0 = 0.72 < 0.82` → 위치가 완전히 다르면 CNN 유사도가 ~0.95 이상이어야 매칭. False positive 방지 |
+| `MATCH_THRESHOLD` | **0.82** | `score = 0.8×cnn + 0.2×spatial`에서, 위치가 완전히 다르면(spatial=0) `0.8×1.0 = 0.80 < 0.82`로 매칭 불가. 같은 위치(spatial=1.0)여도 cnnSim ≥ 0.775 필요. **CNN 유사도 + 위치 근접성 모두 충족해야 매칭**되는 보수적 임계값으로 False positive 방지 |
 | `MAX_FINGERPRINTS` | **20** | 1280 float × 20개 ≈ 100KB. 메모리 부담 최소화하면서 충분한 캐시 용량 |
 
 #### 결과
