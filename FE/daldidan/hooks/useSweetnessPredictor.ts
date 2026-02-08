@@ -48,12 +48,24 @@ export interface PredictionResult {
   sweetness: number;
 }
 
+// 멀티프레임 앙상블 설정
+const ENSEMBLE_FRAME_COUNT = 5;
+
+interface EnsembleState {
+  appleId: number;
+  bbox: CropRequest['bbox'];
+  predictions: number[];
+}
+
 export function useSweetnessPredictor() {
   const modelRef = useRef<TensorflowModel | null>(null);
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [predictionResult, setPredictionResult] =
     useState<PredictionResult | null>(null);
   const weightsRef = useRef<MlpWeights | null>(null);
+
+  // 멀티프레임 앙상블 상태
+  const ensembleRef = useRef<EnsembleState | null>(null);
 
   // SharedValue: 크롭 요청 (JSON 문자열, worklet에서 파싱)
   const cropRequest = useRef(Worklets.createSharedValue<string | null>(null)).current;
@@ -92,12 +104,27 @@ export function useSweetnessPredictor() {
   );
 
   // ─────────────────────────────────────────
+  // 중앙값 계산
+  // ─────────────────────────────────────────
+  const computeMedian = (values: number[]): number => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+      ? (sorted[mid - 1] + sorted[mid]) / 2
+      : sorted[mid];
+  };
+
+  // ─────────────────────────────────────────
   // Worklet → JS: CNN features + manual features 수신
+  // 멀티프레임 앙상블: N회 수집 후 중앙값으로 확정
   // ─────────────────────────────────────────
   const handleFeaturesFromWorklet = useRef(
     Worklets.createRunOnJS(
       (appleId: number, cnnFeatures: number[], manualFeatures: number[]) => {
         try {
+          const ensemble = ensembleRef.current;
+          if (!ensemble || ensemble.appleId !== appleId) return;
+
           // 1. Scale manual features
           const scaled = scaleManualFeatures(manualFeatures);
 
@@ -108,12 +135,27 @@ export function useSweetnessPredictor() {
             return;
           }
 
+          // 3. 앙상블 버퍼에 추가
+          ensemble.predictions.push(sweetness);
           console.log(
-            `[Sweetness] Apple #${appleId}: ${sweetness.toFixed(2)} Brix`
+            `[Sweetness] Apple #${appleId} frame ${ensemble.predictions.length}/${ENSEMBLE_FRAME_COUNT}: ${sweetness.toFixed(2)} Brix`
           );
 
-          // 3. 결과 저장
-          setPredictionResult({ appleId, sweetness });
+          // 4. 충분히 모였으면 중앙값으로 확정
+          if (ensemble.predictions.length >= ENSEMBLE_FRAME_COUNT) {
+            const median = computeMedian(ensemble.predictions);
+            console.log(
+              `[Sweetness] Apple #${appleId} FINAL (median of ${ENSEMBLE_FRAME_COUNT}): ${median.toFixed(2)} Brix`
+            );
+            ensembleRef.current = null;
+            setPredictionResult({ appleId, sweetness: median });
+          } else {
+            // 5. 아직 부족하면 다음 프레임에 다시 크롭 요청
+            cropRequest.value = JSON.stringify({
+              appleId: ensemble.appleId,
+              bbox: ensemble.bbox,
+            });
+          }
         } catch (error: any) {
           console.error(
             `[Sweetness] MLP prediction error for apple #${appleId}:`,
@@ -126,6 +168,7 @@ export function useSweetnessPredictor() {
 
   // ─────────────────────────────────────────
   // JS → Worklet: 크롭 요청 (터치 시 호출)
+  // 멀티프레임 앙상블 시작
   // ─────────────────────────────────────────
   const requestPrediction = useCallback(
     (appleId: number, bbox: CropRequest['bbox']) => {
@@ -133,6 +176,8 @@ export function useSweetnessPredictor() {
         console.warn('[Sweetness] Model not loaded yet');
         return;
       }
+      // 앙상블 상태 초기화
+      ensembleRef.current = { appleId, bbox, predictions: [] };
       cropRequest.value = JSON.stringify({ appleId, bbox });
     },
     [isModelLoaded]

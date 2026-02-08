@@ -119,9 +119,10 @@ export default function CameraView() {
       // 이미 로딩 중이면 무시
       if (loadingIdsRef.current.has(appleId)) return;
 
-      // 터치한 사과의 bbox 가져오기
+      // 이미 당도가 예측된 사과는 재터치 시 무시 (캐싱)
       const touchedSeg = enrichedSegs.find((s) => s.id === appleId);
       if (!touchedSeg) return;
+      if (touchedSeg.sweetness !== undefined) return;
 
       console.log(`[Phase3] Apple #${appleId} touched. Requesting on-device prediction...`);
 
@@ -134,6 +135,34 @@ export default function CameraView() {
       );
 
       // 프레임 프로세서에 크롭 요청 (다음 프레임에서 처리)
+      sweetness.requestPrediction(appleId, touchedSeg.bbox);
+    },
+    [findAppleAtTouch, enrichedSegs, sweetness]
+  );
+
+  // 롱프레스 핸들러: 이미 예측된 사과 재분석
+  const handleOverlayLongPress = useCallback(
+    (screenX: number, screenY: number) => {
+      const appleId = findAppleAtTouch(screenX, screenY);
+      if (appleId === null) return;
+
+      // 이미 로딩 중이면 무시
+      if (loadingIdsRef.current.has(appleId)) return;
+
+      const touchedSeg = enrichedSegs.find((s) => s.id === appleId);
+      if (!touchedSeg) return;
+
+      console.log(`[Phase3] Apple #${appleId} long-pressed. Re-analyzing...`);
+
+      // 기존 당도 초기화 + 로딩 상태 설정
+      loadingIdsRef.current.add(appleId);
+      setEnrichedSegs((prev) =>
+        prev.map((seg) =>
+          seg.id === appleId ? { ...seg, isLoading: true, sweetness: undefined } : seg
+        )
+      );
+
+      // 재분석 요청
       sweetness.requestPrediction(appleId, touchedSeg.bbox);
     },
     [findAppleAtTouch, enrichedSegs, sweetness]
@@ -188,6 +217,7 @@ export default function CameraView() {
               screenSize={screenSize}
               frameSize={frameSize}
               onTouch={handleOverlayTouch}
+              onLongPress={handleOverlayLongPress}
             />
           ) : null}
 

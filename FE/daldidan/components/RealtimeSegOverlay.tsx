@@ -31,6 +31,7 @@ interface Props {
   screenSize: { width: number; height: number };
   frameSize: { width: number; height: number };
   onTouch?: (screenX: number, screenY: number) => void;
+  onLongPress?: (screenX: number, screenY: number) => void;
 }
 
 // 사과별 마스크 색상 (반투명)
@@ -123,6 +124,7 @@ export default function RealtimeSegOverlay({
   screenSize,
   frameSize,
   onTouch,
+  onLongPress,
 }: Props) {
   const paths = useMemo(() => {
     if (
@@ -164,8 +166,14 @@ export default function RealtimeSegOverlay({
     onTouch(locationX, locationY);
   };
 
+  const handleLongPress = (event: any) => {
+    if (!onLongPress) return;
+    const { locationX, locationY } = event.nativeEvent;
+    onLongPress(locationX, locationY);
+  };
+
   return (
-    <TouchableWithoutFeedback onPress={handlePress}>
+    <TouchableWithoutFeedback onPress={handlePress} onLongPress={handleLongPress} delayLongPress={600}>
       <View style={StyleSheet.absoluteFill}>
         {/* Skia Canvas — pointerEvents="none"로 터치가 부모 View를 통과 */}
         <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
