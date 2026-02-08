@@ -25,4 +25,4 @@ export const SEG_APPLE_CLASS_ID = 47;
 export const SEG_MAX_DETECTIONS = 5;
 
 // 프레임 샘플링 (N프레임당 1회 추론)
-export const SEG_SAMPLE_RATE = 15;
+export const SEG_SAMPLE_RATE = 3;
