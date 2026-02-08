@@ -84,8 +84,8 @@ export function useSweetnessPredictor() {
     useState<PredictionResult | null>(null);
   const weightsRef = useRef<MlpWeights | null>(null);
 
-  // 멀티프레임 앙상블 상태
-  const ensembleRef = useRef<EnsembleState | null>(null);
+  // 멀티프레임 앙상블 상태 (사과별 독립 추적)
+  const ensembleMapRef = useRef<Map<number, EnsembleState>>(new Map());
 
   // Fingerprint 캐시 (영구 저장)
   const fingerprintCacheRef = useRef<AppleFingerprint[]>([]);
@@ -94,11 +94,11 @@ export function useSweetnessPredictor() {
   const [fingerprintMatch, setFingerprintMatch] =
     useState<FingerprintMatchResult | null>(null);
 
-  // SharedValue: 당도 예측용 크롭 요청
-  const cropRequest = useRef(Worklets.createSharedValue<string | null>(null)).current;
+  // SharedValue: 당도 예측용 크롭 큐 (JSON 배열)
+  const cropQueue = useRef(Worklets.createSharedValue<string>('[]')).current;
 
-  // SharedValue: fingerprint 추출용 크롭 요청 (자동 re-ID)
-  const fingerprintRequest = useRef(Worklets.createSharedValue<string | null>(null)).current;
+  // SharedValue: fingerprint 추출용 크롭 큐 (JSON 배열)
+  const fingerprintQueue = useRef(Worklets.createSharedValue<string>('[]')).current;
 
   // ─────────────────────────────────────────
   // MLP 추론 (JS 스레드)
@@ -222,8 +222,8 @@ export function useSweetnessPredictor() {
     Worklets.createRunOnJS(
       (appleId: number, cnnFeatures: number[], manualFeatures: number[], frameW: number, frameH: number) => {
         try {
-          const ensemble = ensembleRef.current;
-          if (!ensemble || ensemble.appleId !== appleId) return;
+          const ensemble = ensembleMapRef.current.get(appleId);
+          if (!ensemble) return;
 
           // 1. Scale manual features
           const scaled = scaleManualFeatures(manualFeatures);
@@ -258,14 +258,17 @@ export function useSweetnessPredictor() {
                 frameH
               );
             }
-            ensembleRef.current = null;
+            ensembleMapRef.current.delete(appleId);
             setPredictionResult({ appleId, sweetness: median });
           } else {
-            // 5. 아직 부족하면 다음 프레임에 다시 크롭 요청
-            cropRequest.value = JSON.stringify({
-              appleId: ensemble.appleId,
-              bbox: ensemble.bbox,
-            });
+            // 5. 아직 부족하면 큐에 다음 크롭 요청 추가
+            try {
+              const queue: CropRequest[] = JSON.parse(cropQueue.value);
+              queue.push({ appleId: ensemble.appleId, bbox: ensemble.bbox });
+              cropQueue.value = JSON.stringify(queue);
+            } catch {
+              cropQueue.value = JSON.stringify([{ appleId: ensemble.appleId, bbox: ensemble.bbox }]);
+            }
           }
         } catch (error: any) {
           console.error(
@@ -298,7 +301,7 @@ export function useSweetnessPredictor() {
 
   // ─────────────────────────────────────────
   // JS → Worklet: 크롭 요청 (터치 시 호출)
-  // 멀티프레임 앙상블 시작
+  // 멀티프레임 앙상블 시작 — 사과별 독립
   // ─────────────────────────────────────────
   const requestPrediction = useCallback(
     (appleId: number, bbox: CropRequest['bbox']) => {
@@ -306,9 +309,16 @@ export function useSweetnessPredictor() {
         console.warn('[Sweetness] Model not loaded yet');
         return;
       }
-      // 앙상블 상태 초기화
-      ensembleRef.current = { appleId, bbox, predictions: [] };
-      cropRequest.value = JSON.stringify({ appleId, bbox });
+      // 앙상블 Map에 추가 (기존 엔트리가 있으면 초기화)
+      ensembleMapRef.current.set(appleId, { appleId, bbox, predictions: [] });
+      // 큐에 크롭 요청 추가
+      try {
+        const queue: CropRequest[] = JSON.parse(cropQueue.value);
+        queue.push({ appleId, bbox });
+        cropQueue.value = JSON.stringify(queue);
+      } catch {
+        cropQueue.value = JSON.stringify([{ appleId, bbox }]);
+      }
     },
     [isModelLoaded]
   );
@@ -320,7 +330,14 @@ export function useSweetnessPredictor() {
     (appleId: number, bbox: CropRequest['bbox']) => {
       if (!isModelLoaded) return;
       if (fingerprintCacheRef.current.length === 0) return;
-      fingerprintRequest.value = JSON.stringify({ appleId, bbox });
+      // 큐에 fingerprint 요청 추가
+      try {
+        const queue: CropRequest[] = JSON.parse(fingerprintQueue.value);
+        queue.push({ appleId, bbox });
+        fingerprintQueue.value = JSON.stringify(queue);
+      } catch {
+        fingerprintQueue.value = JSON.stringify([{ appleId, bbox }]);
+      }
     },
     [isModelLoaded]
   );
@@ -374,8 +391,8 @@ export function useSweetnessPredictor() {
   return {
     // Refs (frame processor에서 사용)
     sweetnessModelRef: modelRef,
-    cropRequest,
-    fingerprintRequest,
+    cropQueue,
+    fingerprintQueue,
     handleFeaturesFromWorklet,
     handleFingerprintFromWorklet,
 

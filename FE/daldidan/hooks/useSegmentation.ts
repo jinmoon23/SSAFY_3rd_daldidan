@@ -32,8 +32,8 @@ import {
 
 export interface SweetnessConfig {
   sweetnessModelRef: React.RefObject<TensorflowModel | null>;
-  cropRequest: ISharedValue<string | null>;
-  fingerprintRequest: ISharedValue<string | null>;
+  cropQueue: ISharedValue<string>;
+  fingerprintQueue: ISharedValue<string>;
   handleFeaturesFromWorklet: (
     appleId: number,
     cnnFeatures: number[],
@@ -173,16 +173,21 @@ export function useSegmentation(
       'worklet';
       if (!modelRef.current) return;
 
-      // ── Phase 3: 당도 크롭 요청 처리 (매 프레임 체크) ──
+      // ── Phase 3: 당도 크롭 큐에서 하나 소비 (매 프레임) ──
       const sc = sweetnessConfigRef.current;
-      if (sc) {
-        const requestStr = sc.cropRequest.value;
-        if (requestStr && sc.sweetnessModelRef.current) {
-          sc.cropRequest.value = null; // 즉시 클리어
+      if (sc && sc.sweetnessModelRef.current) {
+        let cropItem: CropRequest | null = null;
+        try {
+          const queue: CropRequest[] = JSON.parse(sc.cropQueue.value);
+          if (queue.length > 0) {
+            cropItem = queue.shift()!;
+            sc.cropQueue.value = JSON.stringify(queue);
+          }
+        } catch { /* empty queue */ }
 
+        if (cropItem) {
           try {
-            const request = JSON.parse(requestStr) as CropRequest;
-            const { appleId, bbox } = request;
+            const { appleId, bbox } = cropItem;
             const cropX = Math.max(0, Math.floor(bbox.xmin));
             const cropY = Math.max(0, Math.floor(bbox.ymin));
             const cropW = Math.min(
@@ -262,15 +267,20 @@ export function useSegmentation(
         }
       }
 
-      // ── Phase 3.5: Fingerprint 크롭 요청 처리 (CNN features만 추출) ──
-      if (sc) {
-        const fpReqStr = sc.fingerprintRequest.value;
-        if (fpReqStr && sc.sweetnessModelRef.current) {
-          sc.fingerprintRequest.value = null;
+      // ── Phase 3.5: Fingerprint 크롭 큐에서 하나 소비 (CNN features만 추출) ──
+      if (sc && sc.sweetnessModelRef.current) {
+        let fpItem: CropRequest | null = null;
+        try {
+          const queue: CropRequest[] = JSON.parse(sc.fingerprintQueue.value);
+          if (queue.length > 0) {
+            fpItem = queue.shift()!;
+            sc.fingerprintQueue.value = JSON.stringify(queue);
+          }
+        } catch { /* empty queue */ }
 
+        if (fpItem) {
           try {
-            const request = JSON.parse(fpReqStr) as CropRequest;
-            const { appleId, bbox } = request;
+            const { appleId, bbox } = fpItem;
             const cropX = Math.max(0, Math.floor(bbox.xmin));
             const cropY = Math.max(0, Math.floor(bbox.ymin));
             const cropW = Math.min(

@@ -59,8 +59,8 @@ export default function CameraView() {
   const { hasPermission, segmentations, frameProcessor, cameraRef } =
     useSegmentation(format, {
       sweetnessModelRef: sweetness.sweetnessModelRef,
-      cropRequest: sweetness.cropRequest,
-      fingerprintRequest: sweetness.fingerprintRequest,
+      cropQueue: sweetness.cropQueue,
+      fingerprintQueue: sweetness.fingerprintQueue,
       handleFeaturesFromWorklet: sweetness.handleFeaturesFromWorklet,
       handleFingerprintFromWorklet: sweetness.handleFingerprintFromWorklet,
     });
