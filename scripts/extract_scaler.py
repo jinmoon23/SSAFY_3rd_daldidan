@@ -20,12 +20,9 @@ import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.join(SCRIPT_DIR, "..")
-# ⚠️ 학습 시 사용된 scaler 경로 (apple_dataset.py와 동일해야 함)
-# 학습 코드(apple_dataset.py)는 meme/scaler.pkl을 사용.
-# outputs/checkpoints/scaler.pkl은 다른 scaler이므로 절대 사용하지 말 것.
 SCALER_PATH = os.path.join(
     PROJECT_ROOT, "BE", "ai", "services",
-    "cnn_feature_seg", "meme", "scaler.pkl",
+    "cnn_feature_seg", "outputs", "checkpoints", "scaler.pkl",
 )
 FE_CONSTANTS = os.path.join(PROJECT_ROOT, "FE", "daldidan", "constants")
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "scalerValues.json")

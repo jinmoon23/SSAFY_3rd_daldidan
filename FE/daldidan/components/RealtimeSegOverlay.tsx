@@ -21,6 +21,8 @@ import {
   Paint,
   Rect,
   Group,
+  RoundedRect,
+  Line,
 } from '@shopify/react-native-skia';
 import { SegmentationResult } from '../hooks/types/objectDetection';
 
@@ -169,6 +171,28 @@ export default function RealtimeSegOverlay({
         <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
           {paths.map((item, i) => {
             if (!item) return null;
+            // bbox → 화면 좌표 변환
+            const topLeft = transformToScreen(
+              item.bbox.xmin,
+              item.bbox.ymin,
+              frameSize.width,
+              frameSize.height,
+              screenSize.width,
+              screenSize.height
+            );
+            const bottomRight = transformToScreen(
+              item.bbox.xmax,
+              item.bbox.ymax,
+              frameSize.width,
+              frameSize.height,
+              screenSize.width,
+              screenSize.height
+            );
+            const bboxLeft = Math.min(topLeft.x, bottomRight.x);
+            const bboxTop = Math.min(topLeft.y, bottomRight.y);
+            const bboxWidth = Math.abs(bottomRight.x - topLeft.x);
+            const bboxHeight = Math.abs(bottomRight.y - topLeft.y);
+
             return (
               <Group key={`seg-${i}`}>
                 {/* 마스크 영역 (반투명 채우기) */}
@@ -183,6 +207,17 @@ export default function RealtimeSegOverlay({
                   color={item.strokeColor}
                   style="stroke"
                   strokeWidth={2}
+                />
+                {/* 바운딩 박스 */}
+                <RoundedRect
+                  x={bboxLeft}
+                  y={bboxTop}
+                  width={bboxWidth}
+                  height={bboxHeight}
+                  r={6}
+                  color={item.strokeColor}
+                  style="stroke"
+                  strokeWidth={2.5}
                 />
               </Group>
             );

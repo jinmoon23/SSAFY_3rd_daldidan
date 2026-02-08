@@ -37,10 +37,20 @@ export default function CameraView() {
     return () => subscription.remove();
   }, []);
 
-  // 카메라 설정
-  const format =
-    device?.formats.find((f) => f.maxFps >= 60) ?? device?.formats[0];
-  const fps = format ? Math.min(60, format.maxFps) : 30;
+  // 카메라 설정 — 해상도 우선 선택 (디바이스 최고 해상도 활용)
+  const format = React.useMemo(() => {
+    if (!device) return undefined;
+    const sorted = [...device.formats]
+      .filter((f) => f.maxFps >= 30)
+      .sort((a, b) => {
+        // 해상도 내림차순 정렬 (가로×세로 면적 기준)
+        const resA = a.videoWidth * a.videoHeight;
+        const resB = b.videoWidth * b.videoHeight;
+        return resB - resA;
+      });
+    return sorted[0] ?? device.formats[0];
+  }, [device]);
+  const fps = format ? Math.min(30, format.maxFps) : 30;
 
   // Phase 3: 온디바이스 당도 예측
   const sweetness = useSweetnessPredictor();
@@ -53,11 +63,11 @@ export default function CameraView() {
       handleFeaturesFromWorklet: sweetness.handleFeaturesFromWorklet,
     });
 
-  // 프레임 크기 (카메라 Landscape 기준)
-  const frameSize = {
-    width: 1920,
-    height: 1080,
-  };
+  // 프레임 크기 (선택된 포맷의 실제 해상도 사용)
+  const frameSize = React.useMemo(() => ({
+    width: format?.videoWidth ?? 1920,
+    height: format?.videoHeight ?? 1080,
+  }), [format]);
 
   // Phase 2: 터치 → 사과 매핑
   const { findAppleAtTouch } = useTouchToApple({
@@ -165,6 +175,7 @@ export default function CameraView() {
               fps={fps}
               format={format}
               photo={true}
+              videoStabilizationMode="auto"
             />
           ) : null}
 
