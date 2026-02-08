@@ -33,10 +33,19 @@ import {
 export interface SweetnessConfig {
   sweetnessModelRef: React.RefObject<TensorflowModel | null>;
   cropRequest: ISharedValue<string | null>;
+  fingerprintRequest: ISharedValue<string | null>;
   handleFeaturesFromWorklet: (
     appleId: number,
     cnnFeatures: number[],
-    manualFeatures: number[]
+    manualFeatures: number[],
+    frameW: number,
+    frameH: number
+  ) => void;
+  handleFingerprintFromWorklet: (
+    appleId: number,
+    cnnFeatures: number[],
+    normalizedCx: number,
+    normalizedCy: number
   ) => void;
 }
 
@@ -236,17 +245,81 @@ export function useSegmentation(
                     MANUAL_FEATURE_CROP_SIZE
                   );
 
-                  // 6. JS로 전송 → MLP 추론
+                  // 6. JS로 전송 → MLP 추론 (프레임 크기 포함)
                   sc.handleFeaturesFromWorklet(
                     appleId,
                     cnnFeatures,
-                    manualFeatures
+                    manualFeatures,
+                    frame.width,
+                    frame.height
                   );
                 }
               }
             }
           } catch (error) {
             logWorklet(`[Worklet] Sweetness crop error: ${error}`);
+          }
+        }
+      }
+
+      // ── Phase 3.5: Fingerprint 크롭 요청 처리 (CNN features만 추출) ──
+      if (sc) {
+        const fpReqStr = sc.fingerprintRequest.value;
+        if (fpReqStr && sc.sweetnessModelRef.current) {
+          sc.fingerprintRequest.value = null;
+
+          try {
+            const request = JSON.parse(fpReqStr) as CropRequest;
+            const { appleId, bbox } = request;
+            const cropX = Math.max(0, Math.floor(bbox.xmin));
+            const cropY = Math.max(0, Math.floor(bbox.ymin));
+            const cropW = Math.min(
+              Math.floor(bbox.xmax - bbox.xmin),
+              frame.width - cropX
+            );
+            const cropH = Math.min(
+              Math.floor(bbox.ymax - bbox.ymin),
+              frame.height - cropY
+            );
+
+            if (cropW >= 10 && cropH >= 10) {
+              const cnnInput = cropAndResize(
+                frame,
+                cropX, cropY, cropW, cropH,
+                EFFICIENTNET_INPUT_SIZE
+              );
+
+              if (cnnInput) {
+                const floatView = new Float32Array(cnnInput);
+                const px = EFFICIENTNET_INPUT_SIZE * EFFICIENTNET_INPUT_SIZE;
+                for (let i = 0; i < px; i++) {
+                  const b = i * 3;
+                  floatView[b] = (floatView[b] - IMAGENET_MEAN[0]) / IMAGENET_STD[0];
+                  floatView[b + 1] = (floatView[b + 1] - IMAGENET_MEAN[1]) / IMAGENET_STD[1];
+                  floatView[b + 2] = (floatView[b + 2] - IMAGENET_MEAN[2]) / IMAGENET_STD[2];
+                }
+
+                const cnnOutputs = sc.sweetnessModelRef.current!.runSync([cnnInput]);
+                const cnnFeaturesRaw = cnnOutputs[0] as Float32Array;
+                const cnnFeatures: number[] = [];
+                for (let i = 0; i < cnnFeaturesRaw.length; i++) {
+                  cnnFeatures.push(cnnFeaturesRaw[i]);
+                }
+
+                // 정규화된 bbox 중심 좌표
+                const normalizedCx = ((bbox.xmin + bbox.xmax) / 2) / frame.width;
+                const normalizedCy = ((bbox.ymin + bbox.ymax) / 2) / frame.height;
+
+                sc.handleFingerprintFromWorklet(
+                  appleId,
+                  cnnFeatures,
+                  normalizedCx,
+                  normalizedCy
+                );
+              }
+            }
+          } catch (error) {
+            logWorklet(`[Worklet] Fingerprint crop error: ${error}`);
           }
         }
       }

@@ -60,7 +60,9 @@ export default function CameraView() {
     useSegmentation(format, {
       sweetnessModelRef: sweetness.sweetnessModelRef,
       cropRequest: sweetness.cropRequest,
+      fingerprintRequest: sweetness.fingerprintRequest,
       handleFeaturesFromWorklet: sweetness.handleFeaturesFromWorklet,
+      handleFingerprintFromWorklet: sweetness.handleFingerprintFromWorklet,
     });
 
   // 프레임 크기 (선택된 포맷의 실제 해상도 사용)
@@ -109,6 +111,42 @@ export default function CameraView() {
     loadingIdsRef.current.delete(appleId);
     console.log(`[Phase3] Apple #${appleId}: ${brix.toFixed(2)} Brix`);
   }, [sweetness.predictionResult]);
+
+  // Phase 3.5: Fingerprint 매칭 결과 수신 → 당도 자동 복원
+  useEffect(() => {
+    if (!sweetness.fingerprintMatch) return;
+    const { appleId, sweetness: brix } = sweetness.fingerprintMatch;
+    setEnrichedSegs((prev) =>
+      prev.map((seg) =>
+        seg.id === appleId
+          ? { ...seg, isLoading: false, sweetness: brix }
+          : seg
+      )
+    );
+    console.log(`[Fingerprint] Apple #${appleId} restored: ${brix.toFixed(2)} Brix`);
+  }, [sweetness.fingerprintMatch]);
+
+  // Phase 3.5: 새 사과 감지 시 자동 fingerprint 매칭 요청
+  // 당도가 없고 로딩 중이 아닌 사과만 대상
+  const fingerprintRequestedRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    for (const seg of enrichedSegs) {
+      if (
+        seg.sweetness === undefined &&
+        !seg.isLoading &&
+        !loadingIdsRef.current.has(seg.id) &&
+        !fingerprintRequestedRef.current.has(seg.id)
+      ) {
+        fingerprintRequestedRef.current.add(seg.id);
+        sweetness.requestFingerprint(seg.id, seg.bbox);
+      }
+    }
+    // 화면에서 사라진 ID 정리
+    const currentIds = new Set(enrichedSegs.map((s) => s.id));
+    for (const id of fingerprintRequestedRef.current) {
+      if (!currentIds.has(id)) fingerprintRequestedRef.current.delete(id);
+    }
+  }, [enrichedSegs, sweetness]);
 
   // 터치 핸들러: 사과 터치 → 온디바이스 당도 예측 요청
   const handleOverlayTouch = useCallback(

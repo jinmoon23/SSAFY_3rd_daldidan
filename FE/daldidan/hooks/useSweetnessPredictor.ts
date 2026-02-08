@@ -48,13 +48,33 @@ export interface PredictionResult {
   sweetness: number;
 }
 
+// Fingerprint 매칭 결과 (자동 당도 복원)
+export interface FingerprintMatchResult {
+  appleId: number;
+  sweetness: number;
+}
+
 // 멀티프레임 앙상블 설정
 const ENSEMBLE_FRAME_COUNT = 5;
+
+// Fingerprint 매칭 상수
+const FINGERPRINT_MATCH_THRESHOLD = 0.82;
+const FINGERPRINT_SPATIAL_WEIGHT = 0.2;
+const FINGERPRINT_CNN_WEIGHT = 0.8;
+const MAX_FINGERPRINTS = 20;
 
 interface EnsembleState {
   appleId: number;
   bbox: CropRequest['bbox'];
   predictions: number[];
+  lastCnnFeatures?: number[];
+}
+
+interface AppleFingerprint {
+  cnnFeatures: number[];
+  normalizedCenter: { x: number; y: number };
+  sweetness: number;
+  timestamp: number;
 }
 
 export function useSweetnessPredictor() {
@@ -67,8 +87,18 @@ export function useSweetnessPredictor() {
   // 멀티프레임 앙상블 상태
   const ensembleRef = useRef<EnsembleState | null>(null);
 
-  // SharedValue: 크롭 요청 (JSON 문자열, worklet에서 파싱)
+  // Fingerprint 캐시 (영구 저장)
+  const fingerprintCacheRef = useRef<AppleFingerprint[]>([]);
+
+  // Fingerprint 매칭 결과
+  const [fingerprintMatch, setFingerprintMatch] =
+    useState<FingerprintMatchResult | null>(null);
+
+  // SharedValue: 당도 예측용 크롭 요청
   const cropRequest = useRef(Worklets.createSharedValue<string | null>(null)).current;
+
+  // SharedValue: fingerprint 추출용 크롭 요청 (자동 re-ID)
+  const fingerprintRequest = useRef(Worklets.createSharedValue<string | null>(null)).current;
 
   // ─────────────────────────────────────────
   // MLP 추론 (JS 스레드)
@@ -104,6 +134,76 @@ export function useSweetnessPredictor() {
   );
 
   // ─────────────────────────────────────────
+  // 코사인 유사도 계산
+  // ─────────────────────────────────────────
+  const cosineSimilarity = (a: number[], b: number[]): number => {
+    let dot = 0, normA = 0, normB = 0;
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom === 0 ? 0 : dot / denom;
+  };
+
+  // ─────────────────────────────────────────
+  // Fingerprint 저장
+  // ─────────────────────────────────────────
+  const storeFingerprint = (
+    cnnFeatures: number[],
+    bbox: CropRequest['bbox'],
+    sweetness: number,
+    frameW: number,
+    frameH: number
+  ) => {
+    const cache = fingerprintCacheRef.current;
+    const normalizedCenter = {
+      x: ((bbox.xmin + bbox.xmax) / 2) / (frameW || 1),
+      y: ((bbox.ymin + bbox.ymax) / 2) / (frameH || 1),
+    };
+    cache.push({ cnnFeatures, normalizedCenter, sweetness, timestamp: Date.now() });
+    // 캐시 크기 제한
+    if (cache.length > MAX_FINGERPRINTS) {
+      cache.splice(0, cache.length - MAX_FINGERPRINTS);
+    }
+    console.log(`[Fingerprint] Stored. Cache size: ${cache.length}`);
+  };
+
+  // ─────────────────────────────────────────
+  // Fingerprint 매칭 (새 사과 → 캐시 비교)
+  // ─────────────────────────────────────────
+  const matchFingerprint = (
+    cnnFeatures: number[],
+    normalizedCenter: { x: number; y: number }
+  ): AppleFingerprint | null => {
+    const cache = fingerprintCacheRef.current;
+    if (cache.length === 0) return null;
+
+    let bestScore = 0;
+    let bestMatch: AppleFingerprint | null = null;
+
+    for (const fp of cache) {
+      const cnnSim = cosineSimilarity(cnnFeatures, fp.cnnFeatures);
+      const dx = normalizedCenter.x - fp.normalizedCenter.x;
+      const dy = normalizedCenter.y - fp.normalizedCenter.y;
+      const spatialSim = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy));
+      const score = FINGERPRINT_CNN_WEIGHT * cnnSim + FINGERPRINT_SPATIAL_WEIGHT * spatialSim;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = fp;
+      }
+    }
+
+    if (bestScore >= FINGERPRINT_MATCH_THRESHOLD && bestMatch) {
+      console.log(`[Fingerprint] Match found! score=${bestScore.toFixed(3)}, sweetness=${bestMatch.sweetness.toFixed(2)}`);
+      return bestMatch;
+    }
+    return null;
+  };
+
+  // ─────────────────────────────────────────
   // 중앙값 계산
   // ─────────────────────────────────────────
   const computeMedian = (values: number[]): number => {
@@ -120,7 +220,7 @@ export function useSweetnessPredictor() {
   // ─────────────────────────────────────────
   const handleFeaturesFromWorklet = useRef(
     Worklets.createRunOnJS(
-      (appleId: number, cnnFeatures: number[], manualFeatures: number[]) => {
+      (appleId: number, cnnFeatures: number[], manualFeatures: number[], frameW: number, frameH: number) => {
         try {
           const ensemble = ensembleRef.current;
           if (!ensemble || ensemble.appleId !== appleId) return;
@@ -135,18 +235,29 @@ export function useSweetnessPredictor() {
             return;
           }
 
-          // 3. 앙상블 버퍼에 추가
+          // 3. 앙상블 버퍼에 추가 + CNN features 보관
           ensemble.predictions.push(sweetness);
+          ensemble.lastCnnFeatures = cnnFeatures;
           console.log(
             `[Sweetness] Apple #${appleId} frame ${ensemble.predictions.length}/${ENSEMBLE_FRAME_COUNT}: ${sweetness.toFixed(2)} Brix`
           );
 
-          // 4. 충분히 모였으면 중앙값으로 확정
+          // 4. 충분히 모였으면 중앙값으로 확정 + fingerprint 저장
           if (ensemble.predictions.length >= ENSEMBLE_FRAME_COUNT) {
             const median = computeMedian(ensemble.predictions);
             console.log(
               `[Sweetness] Apple #${appleId} FINAL (median of ${ENSEMBLE_FRAME_COUNT}): ${median.toFixed(2)} Brix`
             );
+            // Fingerprint 캐시에 저장
+            if (ensemble.lastCnnFeatures) {
+              storeFingerprint(
+                ensemble.lastCnnFeatures,
+                ensemble.bbox,
+                median,
+                frameW,
+                frameH
+              );
+            }
             ensembleRef.current = null;
             setPredictionResult({ appleId, sweetness: median });
           } else {
@@ -167,6 +278,25 @@ export function useSweetnessPredictor() {
   ).current;
 
   // ─────────────────────────────────────────
+  // Worklet → JS: Fingerprint CNN features 수신 (자동 re-ID)
+  // ─────────────────────────────────────────
+  const handleFingerprintFromWorklet = useRef(
+    Worklets.createRunOnJS(
+      (appleId: number, cnnFeatures: number[], normalizedCx: number, normalizedCy: number) => {
+        try {
+          const match = matchFingerprint(cnnFeatures, { x: normalizedCx, y: normalizedCy });
+          if (match) {
+            console.log(`[Fingerprint] Apple #${appleId} → restored ${match.sweetness.toFixed(2)} Brix`);
+            setFingerprintMatch({ appleId, sweetness: match.sweetness });
+          }
+        } catch (error: any) {
+          console.error(`[Fingerprint] Match error: ${error.message}`);
+        }
+      }
+    )
+  ).current;
+
+  // ─────────────────────────────────────────
   // JS → Worklet: 크롭 요청 (터치 시 호출)
   // 멀티프레임 앙상블 시작
   // ─────────────────────────────────────────
@@ -179,6 +309,18 @@ export function useSweetnessPredictor() {
       // 앙상블 상태 초기화
       ensembleRef.current = { appleId, bbox, predictions: [] };
       cropRequest.value = JSON.stringify({ appleId, bbox });
+    },
+    [isModelLoaded]
+  );
+
+  // ─────────────────────────────────────────
+  // JS → Worklet: Fingerprint 크롭 요청 (자동 re-ID용)
+  // ─────────────────────────────────────────
+  const requestFingerprint = useCallback(
+    (appleId: number, bbox: CropRequest['bbox']) => {
+      if (!isModelLoaded) return;
+      if (fingerprintCacheRef.current.length === 0) return;
+      fingerprintRequest.value = JSON.stringify({ appleId, bbox });
     },
     [isModelLoaded]
   );
@@ -233,11 +375,15 @@ export function useSweetnessPredictor() {
     // Refs (frame processor에서 사용)
     sweetnessModelRef: modelRef,
     cropRequest,
+    fingerprintRequest,
     handleFeaturesFromWorklet,
+    handleFingerprintFromWorklet,
 
     // JS API
     requestPrediction,
+    requestFingerprint,
     predictionResult,
+    fingerprintMatch,
     isModelLoaded,
     mlpPredict,
   };
