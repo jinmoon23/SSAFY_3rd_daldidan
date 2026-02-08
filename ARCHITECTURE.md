@@ -10,19 +10,19 @@
 graph TB
     subgraph Mobile["📱 Mobile App (React Native + Expo)"]
         CAM[카메라 프레임]
-        FP["Frame Processor<br/>(Worklet Thread)"]
-        YOLO_D["YOLOv8n-seg<br/>TFLite (13.8MB)"]
-        ENET["EfficientNet-B0<br/>TFLite (8MB)"]
-        MLP["MLP 추론<br/>(JS Thread)"]
-        UI["UI 렌더링<br/>(Skia Canvas)"]
+        FP["Frame Processor\n(Worklet Thread)"]
+        YOLO_D["YOLOv8n-seg\nTFLite (13.8MB)"]
+        ENET["EfficientNet-B0\nTFLite (8MB)"]
+        MLP["MLP 추론\n(JS Thread)"]
+        UI["UI 렌더링\n(Skia Canvas)"]
     end
 
     subgraph Server["🖥️ Backend Server (AWS EC2)"]
         NGINX[Nginx Reverse Proxy]
-        BE["BE Gateway<br/>(FastAPI)"]
-        AI["AI Server<br/>(FastAPI + GPU)"]
-        YOLO_S["YOLOv8l-seg<br/>(PyTorch)"]
-        CNN_S["EfficientNet-B0<br/>+ MLP (PyTorch)"]
+        BE["BE Gateway\n(FastAPI)"]
+        AI["AI Server\n(FastAPI + GPU)"]
+        YOLO_S["YOLOv8l-seg\n(PyTorch)"]
+        CNN_S["EfficientNet-B0\n+ MLP (PyTorch)"]
     end
 
     subgraph Infra["🔧 Infrastructure"]
@@ -38,7 +38,7 @@ graph TB
     ENET -->|1280-dim features| MLP
     MLP -->|당도 Brix| UI
 
-    Mobile -.->|REST API /predict<br/>(Phase 1 Legacy)| NGINX
+    Mobile -.->|REST API /predict\n(Phase 1 Legacy)| NGINX
     NGINX --> BE
     BE --> AI
     AI --> YOLO_S
@@ -56,24 +56,24 @@ graph TB
 ```mermaid
 flowchart LR
     subgraph WorkletThread["🔧 Worklet Thread (매 프레임)"]
-        A["📷 카메라 프레임<br/>(1920×1080)"]
-        B["YOLOv8n-seg<br/>640×640 입력"]
-        C["후처리<br/>(NMS + 마스크)"]
-        D["EfficientNet-B0<br/>224×224 크롭"]
-        E["Manual Features<br/>64×64 크롭"]
+        A["📷 카메라 프레임\n(1920×1080)"]
+        B["YOLOv8n-seg\n640×640 입력"]
+        C["후처리\n(NMS + 마스크)"]
+        D["EfficientNet-B0\n224×224 크롭"]
+        E["Manual Features\n64×64 크롭"]
     end
 
     subgraph JSThread["📋 JS Thread"]
-        F["Stable ID 할당<br/>(IoU 매칭)"]
-        G["MLP 추론<br/>(1286→128→1)"]
-        H["앙상블 버퍼<br/>(5프레임 중앙값)"]
-        I["Fingerprint<br/>캐시 매칭"]
-        J["UI 상태 업데이트<br/>(enrichedSegs)"]
+        F["Stable ID 할당\n(IoU 매칭)"]
+        G["MLP 추론\n(1286→128→1)"]
+        H["앙상블 버퍼\n(5프레임 중앙값)"]
+        I["Fingerprint\n캐시 매칭"]
+        J["UI 상태 업데이트\n(enrichedSegs)"]
     end
 
     subgraph UIThread["🎨 UI Thread"]
-        K["Skia Canvas<br/>마스크 + bbox"]
-        L["당도 툴팁<br/>표시"]
+        K["Skia Canvas\n마스크 + bbox"]
+        L["당도 툴팁\n표시"]
     end
 
     A -->|15프레임마다| B
@@ -103,25 +103,25 @@ flowchart LR
 
 ```mermaid
 graph TD
-    ROOT["app/_layout.tsx<br/>ThemeProvider + Stack"]
+    ROOT["app/_layout.tsx\nThemeProvider + Stack"]
     INDEX["app/index.tsx"]
     TOOLTIP["InfoTooltipProvider"]
-    CAMERA["CameraViewNoDetect<br/>(메인 오케스트레이터)"]
+    CAMERA["CameraViewNoDetect\n(메인 오케스트레이터)"]
 
     ROOT --> INDEX
     INDEX --> TOOLTIP
     TOOLTIP --> CAMERA
 
-    CAMERA --> CAM_COMP["Camera<br/>(react-native-vision-camera)"]
-    CAMERA --> SEG_OVERLAY["RealtimeSegOverlay<br/>(Skia Canvas)"]
-    CAMERA --> HINT["AppleHint<br/>(사과 미감지 시)"]
+    CAMERA --> CAM_COMP["Camera\n(react-native-vision-camera)"]
+    CAMERA --> SEG_OVERLAY["RealtimeSegOverlay\n(Skia Canvas)"]
+    CAMERA --> HINT["AppleHint\n(사과 미감지 시)"]
 
     SEG_OVERLAY --> MASK["Path — 세그멘테이션 마스크"]
     SEG_OVERLAY --> BBOX["RoundedRect — 바운딩 박스"]
     SEG_OVERLAY --> SWEET_TIP["당도 툴팁 / 로딩 스피너"]
 
     SEG_OVERLAY -.->|onTouch| CAMERA
-    SEG_OVERLAY -.->|onLongPress<br/>600ms| CAMERA
+    SEG_OVERLAY -.->|onLongPress\n600ms| CAMERA
 ```
 
 ---
@@ -137,11 +137,11 @@ graph LR
     CVN --> UTA["useTouchToApple()"]
 
     USEG --> UIP["useImageProcessing()"]
-    USEG --> USP_CONFIG["SweetnessConfig<br/>(from useSweetnessPredictor)"]
+    USEG --> USP_CONFIG["SweetnessConfig\n(from useSweetnessPredictor)"]
     USEG --> UPOST["useSegPostprocessing()"]
     USEG --> UMF_W["extractManualFeaturesWorklet()"]
 
-    USP --> UMF["useManualFeatures<br/>(scaleManualFeatures)"]
+    USP --> UMF["useManualFeatures\n(scaleManualFeatures)"]
 
     UIP --> RESIZE["vision-camera-resize-plugin"]
 
@@ -253,17 +253,17 @@ flowchart TD
     end
 
     subgraph EnsembleMap["ensembleMapRef (Map)"]
-        E_A["Apple A<br/>predictions: [12.1, 12.3]<br/>2/5"]
-        E_B["Apple B<br/>predictions: [14.0]<br/>1/5"]
+        E_A["Apple A\npredictions: [12.1, 12.3]\n2/5"]
+        E_B["Apple B\npredictions: [14.0]\n1/5"]
     end
 
     subgraph FP["Frame Processor"]
-        FRAME["매 프레임: queue.shift()<br/>→ 1개만 소비"]
+        FRAME["매 프레임: queue.shift()\n→ 1개만 소비"]
     end
 
     Queue -->|shift()| FRAME
     FRAME -->|CNN features + manual| EnsembleMap
-    EnsembleMap -->|5개 완료 → median| RESULT["predictionResult<br/>{appleId, sweetness}"]
+    EnsembleMap -->|5개 완료 → median| RESULT["predictionResult\n{appleId, sweetness}"]
     EnsembleMap -->|미완료 → 큐 재추가| Queue
 ```
 
@@ -285,8 +285,8 @@ graph LR
     subgraph AIServer["AI Server (FastAPI :8001)"]
         R3["GET /health"]
         R4["POST /predict"]
-        DET["detect_service.py<br/>YOLOv8l-seg (PyTorch)"]
-        PRED["predict_service.py<br/>CNN+MLP Fusion"]
+        DET["detect_service.py\nYOLOv8l-seg (PyTorch)"]
+        PRED["predict_service.py\nCNN+MLP Fusion"]
     end
 
     APP -->|REST API| Gateway
@@ -301,13 +301,13 @@ graph LR
 ```mermaid
 flowchart LR
     IMG["📷 이미지 업로드"]
-    DET["YOLOv8l-seg<br/>(yolov8_pt, version=l)"]
-    SEG["세그멘테이션 마스크<br/>추출"]
+    DET["YOLOv8l-seg\n(yolov8_pt, version=l)"]
+    SEG["세그멘테이션 마스크\n추출"]
     CROP["마스크 기반 크롭"]
-    CNN["EfficientNet-B0<br/>Feature Extractor"]
-    MF["Manual Features<br/>(RGB, YCbCr, GLCM)"]
-    FUSION["CNN 1280 + Manual 6<br/>= 1286-dim"]
-    MLP_S["MLP<br/>(1286→128→1)"]
+    CNN["EfficientNet-B0\nFeature Extractor"]
+    MF["Manual Features\n(RGB, YCbCr, GLCM)"]
+    FUSION["CNN 1280 + Manual 6\n= 1286-dim"]
+    MLP_S["MLP\n(1286→128→1)"]
     BRIX["당도 (Brix)"]
 
     IMG --> DET
